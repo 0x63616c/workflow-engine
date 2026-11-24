@@ -97,6 +97,29 @@ wfe dst run --serve 0.0.0.0:7600 --log /var/lib/wfe/runs.jsonl
   **Simulation** page shows all of the above, and the findings log.
 - In Kubernetes or under systemd, it is one container or unit running that
   command; restart it on a new revision and it carries on with new seeds.
+  It stops cleanly on SIGTERM or Ctrl-C, after the runs in flight finish.
+
+### History
+
+`--history <file>` (or `WFE_DST_HISTORY`) appends one JSON line per minute:
+the revision and session, the seeds that finished, runs, failures, wall and
+simulated time with p50/p95/max run times and the slowest seed, and the
+totals of faults injected and checks run. It is small enough to keep forever
+(about 2 MB a day), and a restarted fuzzer reloads its runs-per-minute chart
+from it.
+
+```sh
+wfe dst history -o table                  # every session: revision, seed range, runs, failures, speedup, faults
+wfe dst history --revision 9c6c325        # one revision's sessions, as JSON
+```
+
+A session runs consecutive seeds, so `first_seed..=last_seed` is exactly what
+passed on that revision (bar the few in flight when it stopped), and
+`wfe dst run --seed <first_seed> --runs <n>` reruns it. Seeds only reproduce
+on the same source.
+
+`--log` keeps every run's full report; on the box it is rotated daily and
+kept for a week.
 
 `deploy/dst-box/provision.sh` builds one on Hetzner Cloud (default: a
 8-core `cpx42` in Helsinki named `wfe-dst`) and joins it to Tailscale. It

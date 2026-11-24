@@ -9,6 +9,7 @@ use std::time::Duration;
 use wfe_core::{Error, Timestamp};
 use wfe_sim::findings;
 use wfe_sim::fuzz::{FuzzConfig, FuzzStatus, Fuzzer};
+use wfe_sim::history::{self, Session};
 use wfe_sim::world::{self, Options};
 
 #[derive(Subcommand)]
@@ -36,6 +37,10 @@ pub(crate) enum DstCommand {
         /// Append one JSON line per run to this file.
         #[arg(long)]
         log: Option<PathBuf>,
+        /// Append one JSON line per minute to this file: the long-term record `wfe dst history` reads, and
+        /// where the runs-per-minute chart is reloaded from after a restart.
+        #[arg(long, env = "WFE_DST_HISTORY")]
+        history: Option<PathBuf>,
         /// Seconds between progress lines on stderr (0: none).
         #[arg(long, default_value_t = 30)]
         progress: u64,
@@ -46,6 +51,15 @@ pub(crate) enum DstCommand {
         seed: u64,
         #[arg(long, default_value_t = 12_000)]
         ticks: u64,
+    },
+    /// Every fuzzer session on record: its revision, the seeds it ran, throughput, failures and faults injected.
+    History {
+        /// The file `wfe dst run --history` appends to.
+        #[arg(long, env = "WFE_DST_HISTORY")]
+        history: PathBuf,
+        /// Only sessions of revisions starting with this.
+        #[arg(long)]
+        revision: Option<String>,
     },
     /// Everything simulation has caught, with the revision that failed.
     Findings {
@@ -60,6 +74,27 @@ pub(crate) enum DstCommand {
     },
 }
 
+fn speedup(sim_ms: u64, wall_ms: u64) -> f64 {
+    if wall_ms == 0 { 0.0 } else { sim_ms as f64 / wall_ms as f64 }
+}
+
+async fn interrupted() {
+    #[cfg(unix)]
+    {
+        let Ok(mut terminate) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) else {
+            return std::future::pending().await;
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    if tokio::signal::ctrl_c().await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
 fn summary(s: &FuzzStatus) -> serde_json::Value {
     json!({
         "running": s.running,
@@ -72,7 +107,7 @@ fn summary(s: &FuzzStatus) -> serde_json::Value {
         "failures": s.failures,
         "simulated_ms": s.sim_ms,
         "wall_ms": s.wall_ms,
-        "speedup": if s.wall_ms == 0 { 0.0 } else { (s.sim_ms as f64 / s.wall_ms as f64 * 10.0).round() / 10.0 },
+        "speedup": (speedup(s.sim_ms, s.wall_ms) * 10.0).round() / 10.0,
         "scenarios": s.scenarios,
         "totals": s.totals,
         "in_flight": s.in_flight,
@@ -86,12 +121,13 @@ fn summary(s: &FuzzStatus) -> serde_json::Value {
 
 pub(crate) async fn run(command: &DstCommand) -> Done {
     match command {
-        DstCommand::Run { threads, ticks, seed, runs, serve, log, progress } => {
+        DstCommand::Run { threads, ticks, seed, runs, serve, log, history, progress } => {
             let mut config = FuzzConfig {
                 ticks: *ticks,
                 first_seed: *seed,
                 max_runs: *runs,
                 log: log.clone(),
+                history: history.clone(),
                 ..FuzzConfig::default()
             };
             if let Some(threads) = threads {
@@ -127,7 +163,7 @@ pub(crate) async fn run(command: &DstCommand) -> Done {
                 });
             }
             let mut last_progress = std::time::Instant::now();
-            let mut interrupt = std::pin::pin!(tokio::signal::ctrl_c());
+            let mut interrupt = std::pin::pin!(interrupted());
             loop {
                 tokio::select! {
                     _ = &mut interrupt => {
@@ -158,6 +194,7 @@ pub(crate) async fn run(command: &DstCommand) -> Done {
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             };
+            fuzzer.flush_history();
             let status = status_once_every_thread_finished_its_seed;
             if status.failures > 0 {
                 println!(
@@ -206,6 +243,48 @@ pub(crate) async fn run(command: &DstCommand) -> Done {
                     Err(Failed(1, Error::new(wfe_core::ErrorCode::Internal, format!("seed {seed} failed: {failure}"))))
                 }
             }
+        }
+        DstCommand::History { history, revision } => {
+            let sessions: Vec<Session> = history::sessions(&history::load(history))
+                .into_iter()
+                .filter(|s| revision.as_ref().is_none_or(|r| s.revision.starts_with(r.as_str())))
+                .collect();
+            let rows = sessions
+                .iter()
+                .map(|s| {
+                    vec![
+                        time(Timestamp::from_millis(s.session * 1_000)),
+                        format!(
+                            "{}{}",
+                            s.revision.chars().take(10).collect::<String>(),
+                            if s.dirty { "+" } else { "" }
+                        ),
+                        format!("{}..={}", s.first_seed, s.last_seed),
+                        s.runs.to_string(),
+                        s.failures.to_string(),
+                        duration_ms(s.sim_ms),
+                        format!("{:.1}x", speedup(s.sim_ms, s.wall_ms)),
+                        s.totals.crashes.to_string(),
+                        s.totals.partitions.to_string(),
+                        s.totals.failovers.to_string(),
+                    ]
+                })
+                .collect();
+            Ok(Output::json(&sessions).with_table(
+                vec![
+                    "STARTED",
+                    "REVISION",
+                    "SEEDS",
+                    "RUNS",
+                    "FAILED",
+                    "SIMULATED",
+                    "SPEEDUP",
+                    "CRASHES",
+                    "PARTITIONS",
+                    "FAILOVERS",
+                ],
+                rows,
+            ))
         }
         DstCommand::Findings { open } => {
             let all: Vec<_> = findings::load().into_iter().filter(|f| !*open || f.status != "fixed").collect();

@@ -13,6 +13,7 @@
 )]
 
 use crate::findings::{self, Finding};
+use crate::history::{self, Minute, OpenMinute};
 use crate::world::{self, Options, Report};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
@@ -38,6 +39,9 @@ pub struct FuzzConfig {
     pub max_runs: Option<u64>,
     /// Append one JSON line per run here.
     pub log: Option<PathBuf>,
+    /// Append one JSON line per minute here (see [`crate::history`]), and
+    /// reload the last hour of runs per minute from it on start.
+    pub history: Option<PathBuf>,
 }
 
 impl Default for FuzzConfig {
@@ -48,6 +52,7 @@ impl Default for FuzzConfig {
             first_seed: None,
             max_runs: None,
             log: None,
+            history: None,
         }
     }
 }
@@ -103,6 +108,9 @@ pub struct FuzzStatus {
     /// The last error writing the per-run log (`FuzzConfig::log`); fuzzing goes on without it.
     #[serde(default)]
     pub log_error: Option<String>,
+    /// The last error appending to the history (`FuzzConfig::history`); fuzzing goes on without it.
+    #[serde(default)]
+    pub history_error: Option<String>,
 }
 
 #[derive(Default)]
@@ -112,6 +120,38 @@ struct State {
     recent: VecDeque<RunRecord>,
     recent_failures: VecDeque<RunRecord>,
     minutes: VecDeque<(u64, u64)>,
+    history: Option<PathBuf>,
+    session: Minute,
+    open_minute: Option<OpenMinute>,
+}
+
+impl State {
+    fn add_to_minute(&mut self, minute: u64, seed: u64, wall_ms: u64, scenario: String, report: Option<&Report>) {
+        if self.open_minute.as_ref().is_some_and(|open| open.minute.minute != minute) {
+            self.close_minute();
+        }
+        let session = &self.session;
+        self.open_minute
+            .get_or_insert_with(|| OpenMinute::new(session, minute))
+            .add_run(seed, wall_ms, scenario, report);
+    }
+
+    fn close_minute(&mut self) {
+        let Some(open) = self.open_minute.take() else { return };
+        let Some(path) = &self.history else { return };
+        if let Err(e) = history::append(path, &open.close()) {
+            self.status.history_error = Some(format!("appending to {}: {e}", path.display()));
+        }
+    }
+}
+
+fn minutes_on_record(path: &Path) -> VecDeque<(u64, u64)> {
+    let since = (unix() / 60).saturating_sub(MINUTES_KEPT as u64);
+    let mut runs: BTreeMap<u64, u64> = BTreeMap::new();
+    for m in history::load_recent(path).into_iter().filter(|m| m.minute > since) {
+        *runs.entry(m.minute).or_insert(0) += m.runs;
+    }
+    runs.into_iter().collect()
 }
 
 pub struct Fuzzer {
@@ -160,7 +200,7 @@ fn scenario(o: &Options) -> String {
     s
 }
 
-fn add(total: &mut Report, r: &Report) {
+pub(crate) fn add(total: &mut Report, r: &Report) {
     total.ticks += r.ticks;
     total.sim_ms += r.sim_ms;
     total.workflows += r.workflows;
@@ -196,9 +236,22 @@ impl Fuzzer {
     pub fn start(config: FuzzConfig) -> Fuzzer {
         let first_seed = config.first_seed.unwrap_or_else(random_first_seed);
         let (revision, dirty, _) = findings::revision();
+        let started_at = unix();
+        let session = Minute {
+            revision: revision.clone(),
+            dirty,
+            session: started_at,
+            first_seed,
+            threads: config.threads,
+            ticks: config.ticks,
+            ..Minute::default()
+        };
         let state = Arc::new(Mutex::new(State {
+            minutes: config.history.as_deref().map(minutes_on_record).unwrap_or_default(),
+            history: config.history.clone(),
+            session,
             status: FuzzStatus {
-                started_at: unix(),
+                started_at,
                 revision,
                 dirty,
                 threads: config.threads,
@@ -270,7 +323,8 @@ impl Fuzzer {
                             let s = &mut state.status;
                             s.runs += 1;
                             s.wall_ms += wall_ms;
-                            let tally = s.scenarios.entry(scenario(&record.options)).or_default();
+                            let scenario = scenario(&record.options);
+                            let tally = s.scenarios.entry(scenario.clone()).or_default();
                             tally.runs += 1;
                             match &record.report {
                                 Some(report) => {
@@ -283,6 +337,7 @@ impl Fuzzer {
                                 }
                             }
                             let minute = record.time / 60;
+                            state.add_to_minute(minute, seed, wall_ms, scenario, record.report.as_ref());
                             match state.minutes.back_mut() {
                                 Some((m, count)) if *m == minute => *count += 1,
                                 _ => state.minutes.push_back((minute, 1)),
@@ -328,6 +383,12 @@ impl Fuzzer {
         self.stop.store(true, Ordering::Relaxed);
     }
 
+    /// Append the minute still collecting runs to the history. Call once the
+    /// workers have finished; `join` does.
+    pub fn flush_history(&self) {
+        locked(&self.state).close_minute();
+    }
+
     /// Wait for the worker threads (after `stop`, or when `max_runs` is
     /// reached).
     pub fn join(mut self) -> FuzzStatus {
@@ -336,6 +397,7 @@ impl Fuzzer {
                 std::panic::resume_unwind(panic);
             }
         }
+        self.flush_history();
         self.status()
     }
 }

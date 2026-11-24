@@ -3,6 +3,8 @@
 # Ubuntu box as root. Idempotent; provision.sh runs it over SSH.
 #
 #   wfe-dst.service     wfe dst run on every core, status on 127.0.0.1:7600
+#                       findings/history.jsonl: one line per minute, kept forever (wfe dst history)
+#                       findings/runs.jsonl: one line per run, rotated daily, 7 days kept
 #   wfe-ui.service      wfe ui on the Tailscale address, port 7500
 #   wfe-update.timer    every 5 minutes: pull main, rebuild, restart both
 set -euo pipefail
@@ -49,7 +51,8 @@ After=network-online.target
 User=wfe
 WorkingDirectory=$src
 Environment=WFE_FINDINGS=$home/findings/dst.jsonl
-ExecStart=$bin dst run --ticks 12000 --serve 127.0.0.1:7600 --progress 0
+Environment=WFE_DST_HISTORY=$home/findings/history.jsonl
+ExecStart=$bin dst run --ticks 12000 --serve 127.0.0.1:7600 --progress 0 --log $home/findings/runs.jsonl
 Nice=10
 Restart=always
 RestartSec=5
@@ -57,6 +60,21 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+
+cat >/etc/logrotate.d/wfe-dst <<EOF
+$home/findings/runs.jsonl {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su wfe wfe
+}
+EOF
+
+grep -q WFE_DST_HISTORY /etc/environment || echo "WFE_DST_HISTORY=$home/findings/history.jsonl" >>/etc/environment
 
 cat >/etc/systemd/system/wfe-ui.service <<EOF
 [Unit]

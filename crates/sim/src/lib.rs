@@ -11,5 +11,6 @@ pub mod net;
 pub use device::SimDevice;
 pub use net::{Net, NetOptions};
 pub mod fuzz;
+pub mod history;
 pub mod workload;
 pub mod world;
