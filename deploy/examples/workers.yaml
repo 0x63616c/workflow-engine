@@ -1,0 +1,54 @@
+# Versioned workers for the demo workflows. Change the template (here,
+# DEMO_REVISION) and the operator starts a new build beside the old one,
+# ramps new workflows onto it, and retires the old build once the workflows
+# pinned to it have finished.
+apiVersion: wfe.dev/v1alpha1
+kind: WorkerDeployment
+metadata:
+  name: demo
+spec:
+  cell: east
+  replicas: 2
+  rollout:
+    strategy: Progressive
+    steps:
+      - { rampPercent: 10, pauseSeconds: 30 }
+      - { rampPercent: 50, pauseSeconds: 30 }
+  sunset:
+    scaledownAfterSeconds: 60
+    deleteAfterSeconds: 300
+  template:
+    spec:
+      containers:
+        - name: worker
+          image: wfe:dev
+          imagePullPolicy: IfNotPresent
+          args: ["worker", "--task-queue", "demo", "--behavior", "pinned"]
+          env:
+            - name: DEMO_REVISION
+              value: "1"
+---
+# The management UI, for both cells.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wfe-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: wfe-ui }
+  template:
+    metadata:
+      labels: { app: wfe-ui }
+    spec:
+      containers:
+        - name: ui
+          image: wfe:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - ui
+            - --listen=0.0.0.0:7500
+            - --cell=east=http://east:7400
+            - --cell=west=http://west:7400
+          ports:
+            - containerPort: 7500

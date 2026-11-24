@@ -1,0 +1,6 @@
+# This crate does real I/O, so it does not use the root clippy.toml determinism bans.
+# crates/rules checks which crates may have their own clippy.toml.
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-print-in-tests = true

@@ -1,0 +1,88 @@
+id: docs-only-on-public-api
+valid:
+  - |
+    /// The id the next event gets.
+    #[must_use]
+    pub fn next() {}
+  - |
+    pub struct A {
+        /// Milliseconds since the Unix epoch.
+        pub at: u64,
+    }
+  - |
+    pub enum E {
+        /// The workflow is still running.
+        Running,
+    }
+  - |
+    pub trait Store {
+        /// Returns `None` when the key was never written.
+        fn get(&self);
+    }
+  - |
+    impl A {
+        /// Panics if the shard is not open.
+        pub fn open(&self) {}
+    }
+  - |
+    //! Module docs are checked by crates/rules, not here.
+    fn f() {}
+  - |
+    /// Start a workflow.
+    #[derive(clap::Args)]
+    struct Start {
+        /// The task queue workers poll.
+        #[arg(long)]
+        queue: String,
+    }
+  - |
+    #[derive(Subcommand)]
+    enum Command {
+        /// Replay one seed.
+        Replay,
+    }
+  - |
+    #[derive(Subcommand)]
+    enum Command {
+        Run {
+            /// Seconds between progress lines.
+            #[arg(long)]
+            progress: u64,
+        },
+    }
+invalid:
+  - |
+    #[derive(Debug)]
+    enum NotClap {
+        /// Help text that no tool reads.
+        Replay,
+    }
+  - |
+    /// Computes the backoff.
+    fn backoff() {}
+  - |
+    /// Only this crate uses it.
+    pub(crate) fn helper() {}
+  - |
+    pub struct A {
+        /// Cached so we do not recompute it.
+        cache: u64,
+    }
+  - |
+    enum Private {
+        /// Waiting for the timer.
+        Waiting,
+    }
+  - |
+    impl A {
+        /// Internal step of open.
+        fn step(&self) {}
+    }
+  - |
+    /** Old-style private doc. */
+    fn f() {}
+  - |
+    fn f() {
+        /// Doc on a local.
+        let x = 1;
+    }

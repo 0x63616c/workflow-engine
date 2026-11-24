@@ -1,0 +1,26 @@
+[package]
+name = "wfe-operator"
+description = "The WFE Kubernetes operator: cells, replication between them, and versioned worker rollouts."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+wfe-core.workspace = true
+wfe-control.workspace = true
+wfe-sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+kube.workspace = true
+rustls.workspace = true
+k8s-openapi.workspace = true
+schemars.workspace = true
+futures.workspace = true
+
+[lints]
+workspace = true

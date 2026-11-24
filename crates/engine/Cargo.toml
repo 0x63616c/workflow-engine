@@ -1,0 +1,18 @@
+[package]
+name = "wfe-engine"
+description = "The workflow engine: a deterministic state machine replicated by each shard."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+wfe-core.workspace = true
+wfe-lsm.workspace = true
+wfe-vsr.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+strum.workspace = true
+
+[lints]
+workspace = true

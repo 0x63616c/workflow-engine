@@ -1,0 +1,69 @@
+# The WFE operator. Apply the CRDs first:
+#
+#   wfe operator crds | kubectl apply -f -
+#   kubectl apply -f deploy/operator.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wfe-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wfe-operator
+  namespace: wfe-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: wfe-operator
+rules:
+  - apiGroups: ["wfe.dev"]
+    resources: ["cells", "cellreplications", "workerdeployments"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["wfe.dev"]
+    resources: ["cells/status", "cellreplications/status", "workerdeployments/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets", "deployments"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: wfe-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: wfe-operator
+subjects:
+  - kind: ServiceAccount
+    name: wfe-operator
+    namespace: wfe-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wfe-operator
+  namespace: wfe-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: wfe-operator }
+  template:
+    metadata:
+      labels: { app: wfe-operator }
+    spec:
+      serviceAccountName: wfe-operator
+      containers:
+        - name: operator
+          image: wfe:dev
+          imagePullPolicy: IfNotPresent
+          args: ["operator", "run"]
+          env:
+            # The image cells run when their spec names none.
+            - name: WFE_IMAGE
+              value: wfe:dev

@@ -1,0 +1,70 @@
+id: enum-names-from-strum
+language: rust
+severity: error
+message: Hand-written table between enum variants and strings. Derive it with strum so the variant list is the only list.
+note: |
+  A new variant must not need a matching edit in a string table somewhere else.
+  - Variant -> name: `#[derive(strum::IntoStaticStr)]` plus `#[strum(serialize_all = "snake_case")]`, then `let name: &'static str = value.into();`
+  - Name -> variant: `#[derive(strum::EnumString)]`, then `s.parse::<MyEnum>()`.
+  - A different string per variant (a label or CSS class): `#[strum(props(class = "..."))]` on each variant and `#[derive(strum::EnumProperty)]`.
+  - Every variant: `#[derive(strum::VariantArray)]`, then `MyEnum::VARIANTS`.
+  Add `strum.workspace = true` to the crate's Cargo.toml if it is missing. See ErrorCode in crates/core/src/error.rs.
+utils:
+  one-variant:
+    any:
+      - kind: scoped_identifier
+      - kind: struct_pattern
+        has:
+          field: type
+          kind: scoped_type_identifier
+      - kind: tuple_struct_pattern
+        has:
+          field: type
+          kind: scoped_identifier
+  variant-to-string:
+    kind: match_arm
+    all:
+      - has:
+          field: value
+          kind: string_literal
+      - has:
+          field: pattern
+          kind: match_pattern
+          has:
+            matches: one-variant
+  string-to-variant:
+    kind: match_arm
+    all:
+      - has:
+          field: pattern
+          kind: match_pattern
+          has:
+            kind: string_literal
+      - has:
+          field: value
+          matches: one-variant
+rule:
+  kind: match_block
+  any:
+    - all:
+        - has:
+            kind: match_arm
+            nthChild: 3
+        - not:
+            has:
+              kind: match_arm
+              not:
+                matches: variant-to-string
+    - all:
+        - has:
+            kind: match_arm
+            nthChild: 1
+            matches: string-to-variant
+        - has:
+            kind: match_arm
+            nthChild: 2
+            matches: string-to-variant
+        - has:
+            kind: match_arm
+            nthChild: 3
+            matches: string-to-variant

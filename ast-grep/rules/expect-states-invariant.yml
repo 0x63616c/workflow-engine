@@ -1,0 +1,19 @@
+id: expect-states-invariant
+language: rust
+severity: error
+message: The expect() message does not say why this cannot fail.
+note: |
+  The message is what a person or agent reads when it fails, and what the simulator
+  records in findings/dst.jsonl. State the invariant that makes failure impossible,
+  as a sentence of at least four words:
+    .expect("shard state")                                 -- names a thing, says nothing
+    .expect("shard state is written before the first op")  -- says what was assumed
+  If failure is possible, it is not an invariant: return an error with `?` instead.
+rule:
+  pattern: $RECV.expect($MSG)
+  has:
+    field: arguments
+    has:
+      kind: string_literal
+      not:
+        regex: '\S+\s+\S+\s+\S+\s+\S+'

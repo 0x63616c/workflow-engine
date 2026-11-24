@@ -1,0 +1,17 @@
+[package]
+name = "wfe-vsr"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+wfe-core.workspace = true
+wfe-lsm.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+thiserror.workspace = true
+strum.workspace = true
+
+[lints]
+workspace = true

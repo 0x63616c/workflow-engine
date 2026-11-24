@@ -1,0 +1,39 @@
+# Deterministic crates (core, lsm, vsr, engine, gateway, sim) use this file.
+# Crates that do real I/O have their own clippy.toml, which replaces this one.
+# crates/rules checks that split; see `wfe_rules::DETERMINISTIC`.
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-print-in-tests = true
+
+disallowed-types = [
+  { path = "std::collections::HashMap", reason = "iteration order changes between runs, which breaks simulation replay. Use std::collections::BTreeMap." },
+  { path = "std::collections::HashSet", reason = "iteration order changes between runs, which breaks simulation replay. Use std::collections::BTreeSet." },
+  { path = "std::collections::hash_map::RandomState", reason = "seeded from the OS, so it differs between runs. Deterministic crates take randomness from wfe_core::Prng." },
+  { path = "f32", reason = "no floats in replicated state: results can differ across platforms, so replicas could disagree. Use integers (for example wfe_core::Ratio or basis points as u32)." },
+  { path = "f64", reason = "no floats in replicated state: results can differ across platforms, so replicas could disagree. Use integers (for example wfe_core::Ratio or basis points as u32)." },
+  { path = "std::sync::Mutex", reason = "deterministic crates are single-threaded so a seed replays exactly. Move shared state behind the shell (wfe-server)." },
+  { path = "std::sync::RwLock", reason = "deterministic crates are single-threaded so a seed replays exactly. Move shared state behind the shell (wfe-server)." },
+]
+
+disallowed-methods = [
+  { path = "std::time::SystemTime::now", reason = "deterministic crates never read the wall clock. Take `now: wfe_core::Timestamp` as a parameter; the shell owns the clock." },
+  { path = "std::time::Instant::now", reason = "deterministic crates never read a clock. Take time as a parameter so the simulator controls it." },
+  { path = "std::thread::spawn", reason = "deterministic crates are single-threaded so a seed replays exactly. Move concurrency to the shell (wfe-server)." },
+  { path = "std::env::var", reason = "configuration arrives as a typed argument, never from the environment, so a run is reproducible. Read env vars in wfe-cli and pass the value in." },
+  { path = "std::env::var_os", reason = "configuration arrives as a typed argument, never from the environment, so a run is reproducible. Read env vars in wfe-cli and pass the value in." },
+  { path = "std::env::vars", reason = "configuration arrives as a typed argument, never from the environment, so a run is reproducible. Read env vars in wfe-cli and pass the value in." },
+  { path = "std::fs::OpenOptions::open", reason = "storage I/O goes through the wfe_core::device::Device trait so the simulator can inject faults. Use a Device; FileDevice is the only real-file implementation." },
+  { path = "std::fs::File::open", reason = "storage I/O goes through the wfe_core::device::Device trait so the simulator can inject faults. Use a Device; FileDevice is the only real-file implementation." },
+  { path = "std::fs::File::create", reason = "storage I/O goes through the wfe_core::device::Device trait so the simulator can inject faults. Use a Device; FileDevice is the only real-file implementation." },
+  { path = "std::fs::read", reason = "storage I/O goes through the wfe_core::device::Device trait so the simulator can inject faults. Use a Device." },
+  { path = "std::fs::write", reason = "storage I/O goes through the wfe_core::device::Device trait so the simulator can inject faults. Use a Device." },
+  { path = "std::process::exit", reason = "a library never ends the process. Return an error and let wfe-cli decide the exit code." },
+]
+
+disallowed-macros = [
+  { path = "std::println", reason = "deterministic crates return data; the caller decides what to print. Return it, or record it in the simulation report." },
+  { path = "std::eprintln", reason = "deterministic crates return data; the caller decides what to print. Return an error instead." },
+  { path = "std::print", reason = "deterministic crates return data; the caller decides what to print." },
+  { path = "std::eprint", reason = "deterministic crates return data; the caller decides what to print." },
+]

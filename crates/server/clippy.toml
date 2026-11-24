@@ -1,0 +1,13 @@
+# This crate does real I/O, so it does not use the root clippy.toml determinism bans.
+# crates/rules checks which crates may have their own clippy.toml.
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-print-in-tests = true
+
+disallowed-macros = [
+  { path = "std::println", reason = "services log through tracing so output is structured and filterable. Use tracing::info! (or warn!/error!)." },
+  { path = "std::eprintln", reason = "services log through tracing so output is structured and filterable. Use tracing::warn! or tracing::error!." },
+  { path = "std::print", reason = "services log through tracing. Use tracing::info!." },
+  { path = "std::eprint", reason = "services log through tracing. Use tracing::warn!." },
+]

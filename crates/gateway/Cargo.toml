@@ -1,0 +1,15 @@
+[package]
+name = "wfe-gateway"
+description = "The stateless front door of a cell: routes API calls to shards, long polls, fans out."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+wfe-core.workspace = true
+wfe-vsr.workspace = true
+wfe-engine.workspace = true
+
+[lints]
+workspace = true

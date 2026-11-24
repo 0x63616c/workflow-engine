@@ -1,0 +1,53 @@
+id: enum-names-from-strum
+valid:
+  - |
+    fn class(s: Status) -> &'static str {
+        match s {
+            Status::Running => "info",
+            Status::Canceled | Status::Terminated => "warn",
+            Status::Failed => "bad",
+        }
+    }
+  - |
+    fn two(s: Side) -> &'static str {
+        match s {
+            Side::Left => "left",
+            Side::Right => "right",
+        }
+    }
+  - |
+    fn mixed(s: Shape) -> String {
+        match s {
+            Shape::Circle => "circle".into(),
+            Shape::Square => "square".into(),
+            Shape::Other(name) => name,
+        }
+    }
+invalid:
+  - |
+    impl ErrorCode {
+        fn as_str(self) -> &'static str {
+            match self {
+                ErrorCode::NotFound => "not_found",
+                ErrorCode::Stale => "stale",
+                ErrorCode::Internal => "internal",
+            }
+        }
+    }
+  - |
+    fn name(m: &Message) -> &'static str {
+        match m {
+            Message::Request(_) => "request",
+            Message::Commit { .. } => "commit",
+            Message::RequestSyncTarget => "request_sync_target",
+        }
+    }
+  - |
+    fn parse(s: &str) -> Option<Status> {
+        Some(match s {
+            "running" => Status::Running,
+            "failed" => Status::Failed,
+            "timed_out" => Status::TimedOut,
+            _ => return None,
+        })
+    }

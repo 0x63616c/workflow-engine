@@ -1,0 +1,19 @@
+[package]
+name = "wfe-codec"
+description = "Payload codecs: compression and claim-check offload to S3-compatible object storage."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+wfe-core.workspace = true
+lz4_flex.workspace = true
+blake3.workspace = true
+thiserror.workspace = true
+sha2 = "0.10"
+hmac = "0.12"
+ureq = "3"
+
+[lints]
+workspace = true

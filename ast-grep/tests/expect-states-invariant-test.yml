@@ -1,0 +1,9 @@
+id: expect-states-invariant
+valid:
+  - 'let s = decode(&b).expect("shard state is written before the first op");'
+  - 'let v = x.expect(&format!("missing {k}"));'
+  - 'let v = x.unwrap_or_default();'
+invalid:
+  - 'let s = decode(&b).expect("shard state");'
+  - 'let n = tree.node(id).expect("node");'
+  - 'let v = x.expect("version exists");'

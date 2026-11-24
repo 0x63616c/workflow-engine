@@ -1,0 +1,22 @@
+[package]
+name = "wfe-server"
+description = "A WFE node: replicas and a gateway on real disks and sockets."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+wfe-core.workspace = true
+wfe-lsm.workspace = true
+wfe-vsr.workspace = true
+wfe-engine.workspace = true
+wfe-gateway.workspace = true
+serde.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

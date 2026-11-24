@@ -1,0 +1,28 @@
+id: no-line-comments
+valid:
+  - |
+    /// The id the next event gets.
+    pub fn next() {}
+  - |
+    //! Module docs.
+    fn f() {}
+  - |
+    // <https://pmg.csail.mit.edu/papers/vr-revisited.pdf>
+    fn f() {}
+invalid:
+  - |
+    fn f() {
+        // Increment the counter.
+        x += 1;
+    }
+  - |
+    // ------------------------------------------------------------------
+    // View change
+    // ------------------------------------------------------------------
+    fn f() {}
+  - |
+    fn f() { let x = 1; /* temporary hack */ }
+  - |
+    fn f() {
+        // let old = compute();
+    }

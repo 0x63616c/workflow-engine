@@ -1,0 +1,67 @@
+id: docs-only-on-public-api
+language: rust
+severity: error
+message: Doc comment on something that is not public API. `///` is only for the contract of a `pub` item.
+note: |
+  Private code says what it does through names, types and asserts, not prose. Pick one:
+  - Rename the item, or a parameter, so the name carries what the doc said.
+  - Turn a stated rule into a type, an assert!, a test, or a lint.
+  - Delete it if it repeats the signature.
+  If this really is public API, make the item `pub` and export it (`unreachable_pub` checks that it is reachable).
+  Docs on fields and variants are allowed only inside a `pub` struct or enum; trait items only inside a `pub trait`.
+  Exception: on types deriving clap (Parser, Subcommand, Args, ValueEnum) or JsonSchema, docs are the --help or
+  schema text users read, so they are allowed there.
+utils:
+  doc-is-runtime-text:
+    follows:
+      stopBy:
+        not:
+          any:
+            - kind: line_comment
+            - kind: block_comment
+            - kind: attribute_item
+      kind: attribute_item
+      regex: 'derive\(.*\b(Parser|Subcommand|Args|ValueEnum|JsonSchema)\b'
+rule:
+  any:
+    - kind: line_comment
+    - kind: block_comment
+  has:
+    kind: outer_doc_comment_marker
+    stopBy: end
+  not:
+    precedes:
+      stopBy:
+        not:
+          any:
+            - kind: line_comment
+            - kind: block_comment
+            - kind: attribute_item
+      any:
+        - matches: doc-is-runtime-text
+        - all:
+            - any:
+                - kind: field_declaration
+                - kind: enum_variant
+            - inside:
+                stopBy: end
+                matches: doc-is-runtime-text
+        - has:
+            kind: visibility_modifier
+            regex: '^pub$'
+        - all:
+            - kind: enum_variant
+            - inside:
+                kind: enum_variant_list
+                inside:
+                  kind: enum_item
+                  has:
+                    kind: visibility_modifier
+                    regex: '^pub$'
+        - inside:
+            kind: declaration_list
+            inside:
+              kind: trait_item
+              has:
+                kind: visibility_modifier
+                regex: '^pub$'

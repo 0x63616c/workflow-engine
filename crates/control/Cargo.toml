@@ -1,0 +1,13 @@
+[package]
+name = "wfe-control"
+description = "What an operator of WFE does next: worker rollouts, retiring old builds, and moving the active role between cells. Decisions only, no I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+wfe-core.workspace = true
+
+[lints]
+workspace = true

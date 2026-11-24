@@ -1,0 +1,22 @@
+id: no-line-comments
+language: rust
+severity: error
+message: Comment in Rust code. WFE code has no narration, banner, or explanation comments.
+note: |
+  A comment here means the code is not saying it. Pick one:
+  - Rename the variable, function, or type so the name says it.
+  - Extract the block into a function whose name says it.
+  - Make the rule a type, an assert!, a test, or a lint (clippy.toml, ast-grep/rules) so it is enforced, not described.
+  - Delete it if it narrates what the next line does.
+  A `// <https://...>` link is allowed only for a constraint we cannot change (protocol, vendor, paper).
+  Public API contracts go in `///` doc comments. See CLAUDE.md.
+rule:
+  any:
+    - kind: block_comment
+    - kind: line_comment
+  not:
+    any:
+      - has:
+          kind: doc_comment
+          stopBy: end
+      - regex: '^//\s*<?https?://'

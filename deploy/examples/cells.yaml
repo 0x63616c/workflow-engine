@@ -1,0 +1,34 @@
+# Two cells: `east` takes writes and ships every change to `west`.
+#
+# To fail over, set east's role to Standby and west's to Active.
+apiVersion: wfe.dev/v1alpha1
+kind: Cell
+metadata:
+  name: east
+spec:
+  cellId: 1
+  shards: 4
+  replicas: 3
+  role: Active
+  storage: 2Gi
+  dataFileMb: 256
+---
+apiVersion: wfe.dev/v1alpha1
+kind: Cell
+metadata:
+  name: west
+spec:
+  cellId: 2
+  shards: 4
+  replicas: 3
+  role: Standby
+  storage: 2Gi
+  dataFileMb: 256
+---
+apiVersion: wfe.dev/v1alpha1
+kind: CellReplication
+metadata:
+  name: east-to-west
+spec:
+  source: east
+  target: west

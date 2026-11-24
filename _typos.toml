@@ -1,0 +1,8 @@
+[default]
+locale = "en-us"
+
+[files]
+extend-exclude = ["Cargo.lock", "findings/dst.jsonl"]
+
+[default.extend-words]
+invokable = "invokable"

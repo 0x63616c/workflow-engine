@@ -1,0 +1,21 @@
+[package]
+name = "wfe-sim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+wfe-core.workspace = true
+wfe-control.workspace = true
+wfe-lsm.workspace = true
+wfe-vsr.workspace = true
+wfe-engine.workspace = true
+wfe-gateway.workspace = true
+wfe-sdk.workspace = true
+wfe-codec.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
