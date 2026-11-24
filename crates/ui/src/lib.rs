@@ -2,7 +2,9 @@
 //!
 //! A server-rendered site (axum + maud, no build step, no JavaScript
 //! framework) over the same HTTP API the CLI and SDK use. It manages any
-//! number of cells and shows a simulation fleet's results.
+//! number of cells and shows a simulation fleet's results. One script
+//! (`app.js`) turns links and forms into in-place updates; every route
+//! still answers with a whole page.
 //!
 //! There is no authentication yet: bind it to a trusted interface.
 
@@ -115,12 +117,23 @@ impl Ui {
         self.cells.iter().find(|c| c.name == name).cloned()
     }
 
+    fn cell_names(&self) -> Vec<String> {
+        self.cells.iter().map(|c| c.name.clone()).collect()
+    }
+
     pub(crate) fn nav(&self, section: &'static str) -> view::Nav {
-        view::Nav { section, cell: None, tab: "" }
+        view::Nav { section, cells: self.cell_names(), polls_for_changes: true, ..view::Nav::default() }
     }
 
     pub(crate) fn cell_nav(&self, cell: &str, tab: &'static str) -> view::Nav {
-        view::Nav { section: "cells", cell: Some(cell.to_string()), tab }
+        view::Nav {
+            section: "cells",
+            cells: self.cell_names(),
+            cell: Some(cell.to_string()),
+            tab,
+            leaf: None,
+            polls_for_changes: true,
+        }
     }
 
     pub(crate) async fn describe_all(&self) -> Vec<(Arc<Cell>, Result<CellInfo, Error>)> {
@@ -151,12 +164,15 @@ pub(crate) fn done(back: &str, outcome: Result<String, Error>) -> Response {
 
 pub(crate) fn not_found(app: &Ui, what: &str) -> Response {
     let body = maud::html! {
-        h1 { "Not found" }
-        p.lead { (what) }
-        p { a href="/" { "Back to the cells" } }
+        div.panel {
+            (view::empty(view::icons::SEARCH, "Not found", maud::html! {
+                span { (what) }
+                a.btn href="/" { "Back to overview" }
+            }))
+        }
     };
-    (axum::http::StatusCode::NOT_FOUND, view::page("Not found", &app.nav(""), &view::Flash::default(), body))
-        .into_response()
+    let nav = app.nav("").polling(false).leaf("Not found");
+    (axum::http::StatusCode::NOT_FOUND, view::page("Not found", &nav, &view::Flash::default(), body)).into_response()
 }
 
 pub fn router(config: UiConfig) -> Router {
@@ -185,6 +201,7 @@ pub fn router(config: UiConfig) -> Router {
         .route("/cells/{cell}/deployments/act", post(deployments::act))
         .route("/dst", get(dst::dashboard))
         .route("/assets/style.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], view::CSS) }))
+        .route("/assets/app.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], view::JS) }))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
 }

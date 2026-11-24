@@ -95,6 +95,20 @@ wfe dst run --serve 0.0.0.0:7600 --log /var/lib/wfe/runs.jsonl
 - In Kubernetes or under systemd, it is one container or unit running that
   command; restart it on a new revision and it carries on with new seeds.
 
+`deploy/dst-box/provision.sh` builds one on Hetzner Cloud (default: a
+8-core `cpx42` in Helsinki named `wfe-dst`) and joins it to Tailscale. It
+needs `hcloud`, `gh` and `op` signed in, and is safe to rerun. On the box:
+
+- `wfe-dst` runs the fuzzer on every core; findings go to
+  `/home/wfe/findings/dst.jsonl`.
+- `wfe-ui` serves the management UI on the box's Tailscale address, port
+  7500. Hetzner's firewall only lets SSH in, so the UI is reachable only over
+  Tailscale.
+- `wfe-update.timer` checks `main` every 5 minutes; when it moved, it
+  rebuilds and restarts both. A build that fails leaves the old one running.
+
+`journalctl -u wfe-dst -u wfe-update` on the box shows what happened.
+
 ## Findings
 
 Every failing run is appended to [`findings/dst.jsonl`](../findings/dst.jsonl)

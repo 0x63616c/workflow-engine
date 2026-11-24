@@ -6,3 +6,6 @@ extend-exclude = ["Cargo.lock", "findings/dst.jsonl"]
 
 [default.extend-words]
 invokable = "invokable"
+
+[default.extend-identifiers]
+hel1 = "hel1"
