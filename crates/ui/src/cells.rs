@@ -1,4 +1,6 @@
-use crate::view::{self, Flash, action, count, enc, error_box, page, pill, role_pill, tile};
+use crate::view::{
+    self, Action, Confirm, Flash, action, count, enc, error_box, head, icon, icons, page, pill, role_pill, stat,
+};
 use crate::{App, Cell, done, not_found};
 use axum::extract::{Form, Path, Query, State};
 use axum::response::{IntoResponse, Response};
@@ -18,18 +20,18 @@ fn names(all: &Described) -> BTreeMap<CellId, String> {
 
 fn cell_label(names: &BTreeMap<CellId, String>, id: CellId) -> Markup {
     match names.get(&id) {
-        Some(name) => html! { a href=(format!("/cells/{}", enc(name))) { (name) } },
-        None => html! { "cell " (id) " " span.muted { "(not in this UI)" } },
+        Some(name) => html! { a.link href=(format!("/cells/{}", enc(name))) { (name) } },
+        None => html! { span data-tip="Not managed by this UI" { "Cell " (id) } },
     }
 }
 
 fn link_state(pending: u64, paused: bool) -> Markup {
     if paused {
-        pill("warn", "paused")
+        pill("warn", "Paused")
     } else if pending == 0 {
-        pill("good", "in sync")
+        pill("good", "In sync")
     } else {
-        pill("info", &format!("{} to ship", count(pending)))
+        pill("info pulse", &format!("{} to ship", count(pending)))
     }
 }
 
@@ -42,7 +44,7 @@ fn lag(info: &CellInfo, target: CellId) -> u64 {
         .sum()
 }
 
-fn links_table(all: &Described, only: Option<&str>, back: &str) -> Markup {
+fn links_table(all: &Described, only: Option<&str>, back: &str) -> Option<Markup> {
     let names = names(all);
     let mut rows = Vec::new();
     for (cell, info) in all {
@@ -54,39 +56,56 @@ fn links_table(all: &Described, only: Option<&str>, back: &str) -> Markup {
             rows.push((cell.name.clone(), info, target, pending, paused));
         }
     }
-    html! {
+    if rows.is_empty() {
+        return None;
+    }
+    Some(html! {
         div.panel.scroll {
-            @if rows.is_empty() {
-                (view::empty("Nothing is replicating yet."))
-            } @else {
-                table {
-                    thead { tr { th { "From" } th { "To" } th { "State" } th.num { "Executions to ship" } th.num { "Changes behind" } th {} } }
-                    tbody {
-                        @for (from, info, target, pending, paused) in &rows {
-                            @let url = format!("/cells/{}/replication", enc(from));
-                            @let target_text = target.to_string();
-                            tr {
-                                td { a href=(format!("/cells/{}", enc(from))) { (from) } }
-                                td { (cell_label(&names, *target)) }
-                                td { (link_state(*pending, *paused)) }
-                                td.num { (count(*pending)) }
-                                td.num { (count(lag(info, *target))) }
-                                td.actions {
-                                    @if *paused {
-                                        (action(&url, "Resume", "small", &[("cell", &target_text), ("op", "resume"), ("back", back)], None))
-                                    } @else {
-                                        (action(&url, "Pause", "small", &[("cell", &target_text), ("op", "pause"), ("back", back)], None))
-                                    }
-                                    (action(&url, "Remove", "small danger", &[("cell", &target_text), ("op", "delete"), ("back", back)],
-                                        Some("Stop replicating to this cell? It keeps what it has.")))
+            table {
+                thead { tr { th { "Link" } th { "State" } th.num { "To ship" } th.num { "Changes behind" } th {} } }
+                tbody {
+                    @for (from, info, target, pending, paused) in &rows {
+                        @let url = format!("/cells/{}/replication", enc(from));
+                        @let target_text = target.to_string();
+                        @let (op, tip, glyph) = if *paused { ("resume", "Resume", icons::PLAY) } else { ("pause", "Pause", icons::PAUSE) };
+                        tr {
+                            td {
+                                span.route {
+                                    a.link href=(format!("/cells/{}", enc(from))) { (from) }
+                                    (icon(icons::ARROW))
+                                    (cell_label(&names, *target))
                                 }
+                            }
+                            td { (link_state(*pending, *paused)) }
+                            td.num { (count(*pending)) }
+                            td.num { (count(lag(info, *target))) }
+                            td.actions {
+                                (action(&Action {
+                                    url: &url,
+                                    fields: &[("cell", &target_text), ("op", op), ("back", back)],
+                                    class: "icon-btn",
+                                    tip: Some(tip),
+                                    confirm: None,
+                                }, icon(glyph)))
+                                (action(&Action {
+                                    url: &url,
+                                    fields: &[("cell", &target_text), ("op", "delete"), ("back", back)],
+                                    class: "icon-btn danger",
+                                    tip: Some("Remove"),
+                                    confirm: Some(Confirm {
+                                        title: "Stop replicating?",
+                                        body: "The target keeps everything it already has.",
+                                        cta: "Stop replicating",
+                                        danger: true,
+                                    }),
+                                }, icon(icons::TRASH)))
                             }
                         }
                     }
                 }
             }
         }
-    }
+    })
 }
 
 fn cell_card(cell: &Cell, info: &Result<CellInfo, Error>, names: &BTreeMap<CellId, String>) -> Markup {
@@ -94,38 +113,38 @@ fn cell_card(cell: &Cell, info: &Result<CellInfo, Error>, names: &BTreeMap<CellI
     match info {
         Err(e) => html! {
             div.card.down {
-                h3 { a href=(href) { (cell.name) } (pill("bad", "unreachable")) }
-                p.muted { (e.message) }
-                p.muted.mono { (cell.urls.join(", ")) }
+                div.card-head {
+                    h3 { a.stretch href=(href) { (cell.name) } }
+                    (pill("bad", "Unreachable"))
+                }
+                div.muted { (e.message) }
+                div.faint.mono { (cell.urls.join(", ")) }
             }
         },
         Ok(info) => {
             let s = CellSummary::of(info);
             html! {
                 div.card {
-                    h3 {
-                        a href=(href) { (cell.name) }
+                    div.card-head {
+                        h3 { a.stretch href=(href) { (cell.name) } }
+                        @if s.shards_up < s.shard_count { (pill("bad", &format!("{} shards down", s.shard_count - s.shards_up))) }
                         (role_pill(&s.role))
-                        @if s.shards_up < s.shard_count { (pill("bad", &format!("{} of {} shards down", s.shard_count - s.shards_up, s.shard_count))) }
                     }
-                    div.muted { "cell " (s.cell) " · epoch " (s.epoch) }
                     div.facts {
-                        div.fact { div.label { "Shards" } div.value { (s.shards_up) "/" (s.shard_count) } }
-                        div.fact { div.label { "Replicas" } div.value { (s.replica_count) } }
-                        div.fact { div.label { "Open workflows" } div.value { (count(s.open_workflows)) } }
+                        div.fact { div.label { "Shards" } div.value { (s.shards_up) small { " / " (s.shard_count) } } }
+                        div.fact { div.label { "Open" } div.value { (count(s.open_workflows)) } }
                         div.fact { div.label { "Executions" } div.value { (count(s.executions)) } }
-                        div.fact { div.label { "Replicated in" } div.value { (count(s.replicated_in)) } }
                     }
                     @if !s.replication.is_empty() {
-                        div.links {
+                        div.card-links {
                             @for (target, (pending, paused)) in &s.replication {
-                                div { "→ " (cell_label(names, *target)) " " (link_state(*pending, *paused)) }
+                                div { (icon(icons::ARROW)) span.grow { (cell_label(names, *target)) } (link_state(*pending, *paused)) }
                             }
                         }
                     }
-                    div.foot {
-                        a href=(format!("{href}/workflows")) { "Workflows" }
-                        a href=(format!("{href}/deployments")) { "Deployments" }
+                    div.card-foot {
+                        a.btn.small href=(format!("{href}/workflows")) { "Workflows" }
+                        a.btn.small href=(format!("{href}/deployments")) { "Deployments" }
                     }
                 }
             }
@@ -133,43 +152,115 @@ fn cell_card(cell: &Cell, info: &Result<CellInfo, Error>, names: &BTreeMap<CellI
     }
 }
 
+fn cell_options(all: &Described, selected: Option<&str>, except: Option<&str>) -> Markup {
+    html! {
+        @for (c, _) in all {
+            @if except != Some(c.name.as_str()) {
+                option selected[selected == Some(c.name.as_str())] { (c.name) }
+            }
+        }
+    }
+}
+
+fn first_with_role<'a>(all: &'a Described, role: &str) -> Option<&'a str> {
+    all.iter()
+        .find(|(_, info)| info.as_ref().is_ok_and(|info| CellSummary::of(info).role == role))
+        .map(|(cell, _)| cell.name.as_str())
+}
+
+fn replicate_dialog(all: &Described, from: Option<&str>, back: &str) -> Markup {
+    let active = first_with_role(all, "active");
+    let standby = first_with_role(all, "standby");
+    view::dialog(
+        "replicate",
+        html! { "Replicate a cell" },
+        "/replicate",
+        html! {
+            input type="hidden" name="back" value=(back);
+            @if let Some(from) = from {
+                input type="hidden" name="from" value=(from);
+                label.field { "To" select name="to" autofocus { (cell_options(all, standby, Some(from))) } }
+            } @else {
+                div.field-row {
+                    label.field { "From" select name="from" autofocus { (cell_options(all, active, None)) } }
+                    label.field { "To" select name="to" { (cell_options(all, standby.or_else(|| all.iter().map(|(c, _)| c.name.as_str()).find(|n| Some(*n) != active)), None)) } }
+                }
+            }
+        },
+        html! { button.btn.primary type="submit" { "Start replicating" } },
+    )
+}
+
+fn failover_dialog(all: &Described) -> Markup {
+    let active = first_with_role(all, "active");
+    let standby = first_with_role(all, "standby");
+    view::dialog(
+        "failover",
+        html! { "Fail over" },
+        "/failover",
+        html! {
+            p { "The new cell takes over writes. The old one becomes its standby." }
+            div.field-row {
+                label.field { "From" select name="from" autofocus { (cell_options(all, active, None)) } }
+                label.field { "To" select name="to" { (cell_options(all, standby.or_else(|| all.iter().map(|(c, _)| c.name.as_str()).find(|n| Some(*n) != active)), None)) } }
+            }
+            label.check {
+                input type="checkbox" name="force" value="1";
+                span { "Force" small { "Don't wait for the old cell. Anything it hadn't shipped is missing until it returns." } }
+            }
+        },
+        html! { button.btn.danger.solid type="submit" { "Fail over" } },
+    )
+}
+
 pub(crate) async fn overview(State(app): State<App>, Query(flash): Query<Flash>) -> Markup {
     let all = app.describe_all().await;
     let names = names(&all);
+    let many = all.len() > 1;
+    let links = links_table(&all, None, "/");
     let body = html! {
-        h1 { "Cells" }
-        p.lead {
-            "A cell is one sharded, replicated cluster. One cell is active and takes writes; "
-            "the others are standbys that receive its workflows and can take over."
-        }
-        div.cards data-live="cells" {
+        (head(html! { h1 { "Cells" } }, html! {}, html! {
+            @if many {
+                button.btn type="button" data-open="failover" { (icon(icons::SWAP)) "Fail over" }
+                button.btn.primary type="button" data-open="replicate" { (icon(icons::PLUS)) "Replicate" }
+            }
+        }))
+        div.cards {
             @for (cell, info) in &all { (cell_card(cell, info, &names)) }
         }
-        h2 { "Replication" }
-        div data-live="links" { (links_table(&all, None, "/")) }
-        @if all.len() > 1 {
-            div.split style="margin-top:16px" {
-                div.panel.pad {
-                    form.row method="post" action="/replicate" {
-                        label { "Replicate" select name="from" { @for (c, _) in &all { option { (c.name) } } } }
-                        label { "to" select name="to" { @for (c, _) in all.iter().rev() { option { (c.name) } } } }
-                        button.primary type="submit" { "Start replicating" }
-                    }
-                }
-                div.panel.pad {
-                    form.row method="post" action="/failover" data-confirm="Move the active role? Writes to the old cell stop." {
-                        label { "Fail over from" select name="from" { @for (c, _) in &all { option { (c.name) } } } }
-                        label { "to" select name="to" { @for (c, _) in all.iter().rev() { option { (c.name) } } } }
-                        label.check data-tip="Promote without waiting for the old cell. Use when it is gone; workflows it had not shipped are missing until it returns." {
-                            input type="checkbox" name="force" value="1"; "Force"
-                        }
-                        button.danger type="submit" { "Fail over" }
-                    }
-                }
-            }
+        @if let Some(links) = links {
+            h2 { "Replication" }
+            (links)
+        }
+        @if many {
+            (replicate_dialog(&all, None, "/"))
+            (failover_dialog(&all))
         }
     };
     page("Cells", &app.nav("cells"), &flash, body)
+}
+
+fn role_action(back: &str, role: &'static str) -> Markup {
+    let url = format!("{back}/role");
+    let confirm = if role == "active" {
+        Confirm {
+            title: "Make this cell active?",
+            body: "It starts taking writes. To move the role without losing writes, fail over instead.",
+            cta: "Make active",
+            danger: false,
+        }
+    } else {
+        Confirm {
+            title: "Make this cell a standby?",
+            body: "It stops taking writes and only receives replication.",
+            cta: "Make standby",
+            danger: true,
+        }
+    };
+    action(
+        &Action { url: &url, fields: &[("role", role)], class: "btn", tip: None, confirm: Some(confirm) },
+        html! { (confirm.cta) },
+    )
 }
 
 pub(crate) async fn detail(State(app): State<App>, Path(name): Path<String>, Query(flash): Query<Flash>) -> Response {
@@ -182,39 +273,39 @@ pub(crate) async fn detail(State(app): State<App>, Path(name): Path<String>, Que
         .map(|(_, info)| info.clone())
         .unwrap_or_else(|| Err(Error::internal("missing")));
     let back = format!("/cells/{}", enc(&name));
+    let many = all.len() > 1;
     let body = html! {
         @match &info {
             Err(e) => {
-                div.head { h1 { (name) } (pill("bad", "unreachable")) }
+                (head(html! { h1 { (name) } (pill("bad", "Unreachable")) }, html! {}, html! {}))
                 (error_box("The cell did not answer", e))
             }
             Ok(info) => {
                 @let s = CellSummary::of(info);
-                div data-live="head" {
-                    div.head {
-                        h1 { (name) }
-                        (role_pill(&s.role))
-                        span.muted { "cell " (s.cell) " · epoch " (s.epoch) " · " (s.shard_count) " shards × " (s.replica_count) " replicas" }
-                    }
-                    div.tiles {
-                        (tile("Shards up", format!("{}/{}", s.shards_up, s.shard_count), ""))
-                        (tile("Open workflows", count(s.open_workflows), ""))
-                        (tile("Executions", count(s.executions), "open and closed"))
-                        (tile("Replicated in", count(s.replicated_in), "changes from other cells"))
-                    }
-                }
-                div.panel.pad {
-                    form.row method="post" action=(format!("{back}/role")) data-confirm="Change this cell's role?" {
-                        span { "Role: a standby rejects writes and only takes replication. To move the active role safely, use " a href="/" { "fail over" } "." }
-                        button type="submit" name="role" value="active" { "Make active" }
-                        button type="submit" name="role" value="standby" { "Make standby" }
-                    }
+                (head(
+                    html! { h1 { (name) } (role_pill(&s.role)) },
+                    html! {
+                        span { "Cell " (s.cell) }
+                        span.sep { (s.shard_count) " shards × " (s.replica_count) " replicas" }
+                        span.sep { "Epoch " (s.epoch) }
+                    },
+                    html! {
+                        @if s.role != "active" { (role_action(&back, "active")) }
+                        @if s.role != "standby" { (role_action(&back, "standby")) }
+                        @if many { button.btn.primary type="button" data-open="replicate" { (icon(icons::PLUS)) "Replicate" } }
+                    },
+                ))
+                div.stats {
+                    div.stat { div.label { "Shards up" } div.value { (s.shards_up) small { " / " (s.shard_count) } } }
+                    (stat("Open workflows", count(s.open_workflows), ""))
+                    (stat("Executions", count(s.executions), ""))
+                    (stat("Replicated in", count(s.replicated_in), ""))
                 }
                 h2 { "Shards" }
-                div.panel.scroll data-live="shards" {
+                div.panel.scroll {
                     table {
                         thead { tr {
-                            th { "Shard" } th { "Role" } th.num { "Epoch" } th.num { "Open" } th.num { "Executions" }
+                            th { "Shard" } th { "Role" } th.num { "Open" } th.num { "Executions" }
                             th.num { "Log position" } th.num { "Changes" } th.num { "Replicated in" } th { "Replicating to" }
                         } }
                         tbody {
@@ -223,7 +314,6 @@ pub(crate) async fn detail(State(app): State<App>, Path(name): Path<String>, Que
                                     Some(sh) => tr {
                                         td { (sh.shard) }
                                         td { (role_pill(if sh.active { "active" } else { "standby" })) }
-                                        td.num { (sh.epoch) }
                                         td.num { (count(sh.open_workflows)) }
                                         td.num { (count(sh.executions)) }
                                         td.num { (count(sh.op)) }
@@ -231,13 +321,14 @@ pub(crate) async fn detail(State(app): State<App>, Path(name): Path<String>, Que
                                         td.num { (count(sh.replicated_in)) }
                                         td {
                                             @for r in &sh.replication {
-                                                div { (cell_label(&names, r.target.cell)) " " (link_state(r.pending, r.paused)) " "
-                                                    span.muted { "acked " (count(r.acked_seq)) " of " (count(r.head_seq)) } }
+                                                div.route data-tip=(format!("Acknowledged {} of {}", count(r.acked_seq), count(r.head_seq))) {
+                                                    (cell_label(&names, r.target.cell)) (link_state(r.pending, r.paused))
+                                                }
                                             }
-                                            @if sh.replication.is_empty() { span.muted { "—" } }
+                                            @if sh.replication.is_empty() { span.faint { "—" } }
                                         }
                                     },
-                                    None => tr { td { (shard) } td colspan="8" { (pill("bad", "no answer")) } },
+                                    None => tr { td { (shard) } td colspan="7" { (pill("bad", "No answer")) } },
                                 }
                             }
                         }
@@ -245,32 +336,35 @@ pub(crate) async fn detail(State(app): State<App>, Path(name): Path<String>, Que
                 }
             }
         }
-        h2 { "Nodes" span.muted { "each node's own view of the replicas it hosts" } }
-        div data-live="nodes" {
+        h2 { "Nodes" }
+        div.stack {
             @for (url, status) in &nodes {
-                div.panel.scroll style="margin-bottom:12px" {
+                div.panel {
                     @match status {
-                        None => div.empty { span.mono { (url) } " " (pill("bad", "no answer")) },
+                        None => div.panel-head { h3.mono { (url) } (pill("bad", "No answer")) },
                         Some(node) => {
-                            table {
-                                thead { tr {
-                                    th { "Node " (node.node) " · " span.mono { (url) } }
-                                    th { "Replica" } th { "State" } th { "Role" } th.num { "View" } th.num { "Op" } th.num { "Commit" } th.num { "Checkpoint" }
-                                } }
-                                tbody {
-                                    @for r in &node.hosted {
-                                        tr {
-                                            td { "shard " (r.shard) }
-                                            td { (r.replica) }
-                                            td {
-                                                (pill(if r.status == "normal" { "good" } else { "warn" }, &r.status))
-                                                @if r.repairing { " " (pill("warn", "repairing")) }
+                            div.panel-head { h3 { "Node " (node.node) } span.faint.mono { (url) } }
+                            div.scroll {
+                                table {
+                                    thead { tr {
+                                        th { "Shard" } th { "Replica" } th { "State" } th { "Role" }
+                                        th.num { "View" } th.num { "Op" } th.num { "Commit" } th.num { "Checkpoint" }
+                                    } }
+                                    tbody {
+                                        @for r in &node.hosted {
+                                            tr {
+                                                td { (r.shard) }
+                                                td { (r.replica) }
+                                                td {
+                                                    (pill(if r.status == "normal" { "good" } else { "warn" }, &view::sentence(&r.status)))
+                                                    @if r.repairing { " " (pill("warn pulse", "Repairing")) }
+                                                }
+                                                td { @if r.primary { (pill("info", "Primary")) } @else { span.muted { "Backup" } } }
+                                                td.num { (r.view) }
+                                                td.num { (count(r.op)) }
+                                                td.num { (count(r.commit)) }
+                                                td.num { (count(r.checkpoint_op)) }
                                             }
-                                            td { @if r.primary { (pill("info", "primary")) } @else { span.muted { "backup" } } }
-                                            td.num { (r.view) }
-                                            td.num { (count(r.op)) }
-                                            td.num { (count(r.commit)) }
-                                            td.num { (count(r.checkpoint_op)) }
                                         }
                                     }
                                 }
@@ -280,18 +374,11 @@ pub(crate) async fn detail(State(app): State<App>, Path(name): Path<String>, Que
                 }
             }
         }
-        h2 { "Replication from this cell" }
-        div data-live="links" { (links_table(&all, Some(&name), &back)) }
-        @if all.len() > 1 {
-            div.panel.pad style="margin-top:12px" {
-                form.row method="post" action="/replicate" {
-                    input type="hidden" name="from" value=(name);
-                    input type="hidden" name="back" value=(back);
-                    label { "Replicate this cell to" select name="to" { @for (c, _) in all.iter().filter(|(c, _)| c.name != name) { option { (c.name) } } } }
-                    button.primary type="submit" { "Start replicating" }
-                }
-            }
+        @if let Some(links) = links_table(&all, Some(&name), &back) {
+            h2 { "Replication" }
+            (links)
         }
+        @if many { (replicate_dialog(&all, Some(&name), &back)) }
     };
     page(&name, &app.cell_nav(&name, "overview"), &flash, body).into_response()
 }

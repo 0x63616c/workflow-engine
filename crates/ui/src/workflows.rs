@@ -1,4 +1,7 @@
-use crate::view::{self, Flash, count, duration_ms, enc, error_box, page, payload, pill, tile, when, workflow_pill};
+use crate::view::{
+    self, Flash, code_block, copy_button, count, duration_ms, enc, error_box, head, icon, icons, page, payload, pill,
+    sentence, stat, when, workflow_pill,
+};
 use crate::{App, done, not_found, unexpected};
 use axum::extract::{Form, Path, Query, State};
 use axum::response::{IntoResponse, Response};
@@ -14,10 +17,10 @@ fn workflow_href(cell: &str, id: &str, run: Option<Id128>) -> String {
 
 fn version_text(v: &WorkflowVersioning) -> Markup {
     html! {
-        @match &v.version { Some(version) => span.mono { (version) }, None => span.muted { "unversioned" } }
+        @match &v.version { Some(version) => span.mono { (version) }, None => span.faint { "Unversioned" } }
         @match &v.override_ {
-            Some(VersioningOverride::Pinned(p)) => { " " (pill("warn", &format!("pinned to {p}"))) }
-            Some(VersioningOverride::AutoUpgrade) => { " " (pill("warn", "auto-upgrade override")) }
+            Some(VersioningOverride::Pinned(p)) => { " " (pill("warn", &format!("Pinned to {p}"))) }
+            Some(VersioningOverride::AutoUpgrade) => { " " (pill("warn", "Auto-upgrade")) }
             None => {}
         }
     }
@@ -37,15 +40,33 @@ pub(crate) struct ListQuery {
 
 const LIST_LIMIT: u32 = 1_000;
 
+fn start_dialog(base: &str) -> Markup {
+    view::dialog(
+        "start",
+        html! { "Start a workflow" },
+        &format!("{base}/start"),
+        html! {
+            div.field-row {
+                label.field { "Type" input type="text" name="workflow_type" required autofocus placeholder="greet" autocomplete="off" data-1p-ignore; }
+                label.field { "Task queue" input type="text" name="task_queue" required placeholder="demo" autocomplete="off" data-1p-ignore; }
+            }
+            label.field { span { "ID " small { "optional" } } input type="text" name="workflow_id" placeholder="Generated" autocomplete="off" data-1p-ignore; }
+            label.field { span { "Input " small { "JSON, optional" } } textarea name="input" spellcheck="false" placeholder="{\"name\": \"Ada\"}" {} }
+        },
+        html! { button.btn.primary type="submit" { "Start workflow" } },
+    )
+}
+
 pub(crate) async fn list(State(app): State<App>, Path(name): Path<String>, Query(q): Query<ListQuery>) -> Response {
     let Some(cell) = app.cell(&name) else { return not_found(&app, &format!("There is no cell named {name}.")) };
     let some = |s: &String| (!s.trim().is_empty()).then(|| s.trim().to_string());
-    let unfiltered_status_so_the_chips_can_count_every_status = None;
+    let unfiltered_status_so_the_tabs_can_count_every_status = None;
     let filter = ListFilter {
-        status: unfiltered_status_so_the_chips_can_count_every_status,
+        status: unfiltered_status_so_the_tabs_can_count_every_status,
         workflow_type: some(&q.workflow_type),
         id_prefix: some(&q.prefix),
     };
+    let filtered = filter.workflow_type.is_some() || filter.id_prefix.is_some();
     let result = match cell.api(ApiRequest::ListWorkflows { filter, limit: LIST_LIMIT }).await {
         Ok(ApiResponse::Workflows(list)) => Ok(list),
         Ok(other) => Err(unexpected(&other)),
@@ -53,79 +74,82 @@ pub(crate) async fn list(State(app): State<App>, Path(name): Path<String>, Query
     };
     let base = format!("/cells/{}/workflows", enc(&name));
     let with_status = |status: &str| {
-        format!("{base}?status={status}&type={}&prefix={}", enc(q.workflow_type.trim()), enc(q.prefix.trim()))
-    };
-    let wanted = WorkflowStatus::parse(&q.status);
-    let body = html! {
-        div.head { h1 { "Workflows" } }
-        details.drawer {
-            summary { "Start a workflow" }
-            div {
-                form.stack method="post" action=(format!("{base}/start")) {
-                    div.row.form style="display:flex;gap:10px;flex-wrap:wrap" {
-                        label { "Workflow type" input type="text" name="workflow_type" required placeholder="greet"; }
-                        label { "Task queue" input type="text" name="task_queue" required placeholder="demo"; }
-                        label { "Workflow id (optional)" input type="text" name="workflow_id" placeholder="generated"; }
-                    }
-                    label { "Input (one JSON value)" textarea name="input" placeholder="{\"name\": \"wfe\"}" {} }
-                    div { button.primary type="submit" { "Start" } }
-                }
+        let mut href = base.clone();
+        for (key, value) in [("status", status), ("type", q.workflow_type.trim()), ("prefix", q.prefix.trim())] {
+            if !value.is_empty() {
+                href += if href.contains('?') { "&" } else { "?" };
+                href += &format!("{key}={}", enc(value));
             }
         }
-        form.row method="get" action=(base) style="margin:16px 0 4px" {
-            input type="hidden" name="status" value=(q.status);
-            label { "Type" input type="text" name="type" value=(q.workflow_type); }
-            label { "Id starts with" input type="text" name="prefix" value=(q.prefix); }
-            button type="submit" { "Filter" }
-        }
+        href
+    };
+    let wanted = WorkflowStatus::parse(&q.status);
+    let start_button =
+        html! { button.btn.primary type="button" data-open="start" { (icon(icons::PLUS)) "Start workflow" } };
+    let body = html! {
+        (head(html! { h1 { "Workflows" } }, html! {}, start_button.clone()))
         @match &result {
             Err(e) => (error_box("Could not list workflows", e)),
             Ok(workflows) => {
                 @let counts = count_by_status(workflows);
-                div data-live="list" {
-                    div.chips {
-                        a.chip.on[wanted.is_none()] href=(with_status("")) { "All" b { (count(workflows.len() as u64)) } }
+                @let shown: Vec<&WorkflowInfo> = workflows.iter().filter(|w| wanted.is_none_or(|s| w.status == s)).collect();
+                div.toolbar {
+                    div.tabs {
+                        a.tab.on[wanted.is_none()] href=(with_status("")) { "All" b { (count(workflows.len() as u64)) } }
                         @for (status, n) in &counts {
-                            a.chip.on[q.status == *status] href=(with_status(status)) { (status.replace('_', " ")) b { (count(*n)) } }
+                            a.tab.on[q.status == *status] href=(with_status(status)) { (sentence(status)) b { (count(*n)) } }
                         }
                     }
-                    @let shown: Vec<&WorkflowInfo> = workflows.iter().filter(|w| wanted.is_none_or(|s| w.status == s)).collect();
-                    div.panel.scroll {
-                        @if shown.is_empty() {
-                            (view::empty("No workflows match."))
+                    form.filters method="get" action=(base) data-auto {
+                        input type="hidden" name="status" value=(q.status);
+                        div.search {
+                            (icon(icons::SEARCH))
+                            input type="text" name="prefix" value=(q.prefix) placeholder="Search by ID" data-search autocomplete="off" data-1p-ignore aria-label="Search by ID";
+                        }
+                        input.short type="text" name="type" value=(q.workflow_type) placeholder="Type" autocomplete="off" data-1p-ignore aria-label="Type";
+                    }
+                }
+                div.panel {
+                    @if shown.is_empty() {
+                        @if filtered || wanted.is_some() {
+                            (view::empty(icons::SEARCH, "No matches", html! { a.btn href=(base) { "Clear filters" } }))
                         } @else {
+                            (view::empty(icons::WORKFLOW, "No workflows yet", start_button))
+                        }
+                    } @else {
+                        div.scroll {
                             table {
                                 thead { tr {
-                                    th { "Workflow id" } th { "Type" } th { "Status" } th { "Task queue" } th { "Version" }
-                                    th { "Started" } th { "Ran for" } th.num { "Events" } th.num { "Shard" }
+                                    th { "ID" } th { "Status" } th { "Type" } th { "Task queue" } th { "Version" }
+                                    th { "Started" } th.num { "Duration" }
                                 } }
                                 tbody {
                                     @for w in &shown {
-                                        tr {
-                                            td.id.wrap { a href=(workflow_href(&name, &w.workflow_id, Some(w.run_id))) { (w.workflow_id) } }
-                                            td { (w.workflow_type) }
+                                        @let href = workflow_href(&name, &w.workflow_id, Some(w.run_id));
+                                        tr data-href=(href) {
+                                            td.id.wrap { a href=(href) { (w.workflow_id) } }
                                             td { (workflow_pill(w.status)) }
-                                            td { (w.task_queue) }
+                                            td { (w.workflow_type) }
+                                            td.muted { (w.task_queue) }
                                             td { (version_text(&w.versioning)) }
-                                            td.tight { (when(w.start_time)) }
-                                            td.tight {
-                                                @if w.close_time.is_zero() { span.muted { (duration_ms(view::now().since_ms(w.start_time))) " so far" } }
+                                            td.tight.muted { (when(w.start_time)) }
+                                            td.num.tight {
+                                                @if w.close_time.is_zero() { (duration_ms(view::now().since_ms(w.start_time))) }
                                                 @else { (duration_ms(w.close_time.since_ms(w.start_time))) }
                                             }
-                                            td.num { (w.history_length) }
-                                            td.num { (w.shard) }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-                    @if u32::try_from(workflows.len()).map_or(true, |n| n >= LIST_LIMIT) {
-                        p.muted { "Showing the newest " (LIST_LIMIT) " per shard; narrow the filter to see others." }
+                        @if u32::try_from(workflows.len()).map_or(true, |n| n >= LIST_LIMIT) {
+                            div.panel-foot { "Showing the newest " (count(u64::from(LIST_LIMIT))) " per shard. Search to find older ones." }
+                        }
                     }
                 }
             }
         }
+        (start_dialog(&base))
     };
     page("Workflows", &app.cell_nav(&name, "workflows"), &q.flash, body).into_response()
 }
@@ -260,6 +284,86 @@ fn event_fields(attrs: &EventAttrs) -> Vec<(String, serde_json::Value)> {
     out
 }
 
+fn spaced(name: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in name.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            out.push(' ');
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn timeline(events: &[Event], first: wfe_core::Timestamp) -> Markup {
+    html! {
+        ol.timeline {
+            @for e in events {
+                li class=(format!("ev {}", event_kind(&e.attrs))) {
+                    span.ev-dot {}
+                    div.ev-main {
+                        span.ev-name { (spaced(e.attrs.name())) }
+                        @let (nested, scalars): (Vec<_>, Vec<_>) =
+                            event_fields(&e.attrs).into_iter().partition(|(_, value)| value.is_object() || value.is_array());
+                        @for (key, value) in &scalars {
+                            span.ev-field { (key.replace('_', " ")) " " span.mono { (view::inline_json(value)) } }
+                        }
+                        @for (key, value) in &nested {
+                            details.ev-json {
+                                summary { (sentence(key)) }
+                                (code_block(&serde_json::to_string_pretty(value).unwrap_or_default()))
+                            }
+                        }
+                    }
+                    span.ev-time data-tip=(e.time.rfc3339()) {
+                        b { "#" (e.id) }
+                        "+" (format!("{:.3}", e.time.micros().saturating_sub(first.micros()) as f64 / 1e6)) "s"
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn workflow_dialogs(act: &str, id: &str, run: &str) -> Markup {
+    let target = html! {
+        input type="hidden" name="id" value=(id);
+        input type="hidden" name="run" value=(run);
+    };
+    html! {
+        (view::dialog("signal", html! { "Send a signal" }, act, html! {
+            (target)
+            input type="hidden" name="op" value="signal";
+            label.field { "Name" input type="text" name="name" required autofocus placeholder="approve" autocomplete="off" data-1p-ignore; }
+            label.field { span { "Input " small { "JSON, optional" } } textarea name="input" spellcheck="false" {} }
+        }, html! { button.btn.primary type="submit" { "Send signal" } }))
+        (view::dialog("cancel", html! { "Cancel this workflow?" }, act, html! {
+            (target)
+            input type="hidden" name="op" value="cancel";
+            p { "The workflow is asked to stop and can clean up first." }
+            label.field { span { "Reason " small { "optional" } } input type="text" name="reason" autofocus autocomplete="off" data-1p-ignore; }
+        }, html! { button.btn.primary type="submit" { "Request cancel" } }))
+        (view::dialog("terminate", html! { "Terminate this workflow?" }, act, html! {
+            (target)
+            input type="hidden" name="op" value="terminate";
+            p { "It stops now, with no chance to clean up." }
+            label.field { span { "Reason " small { "optional" } } input type="text" name="reason" autofocus autocomplete="off" data-1p-ignore; }
+        }, html! { button.btn.danger.solid type="submit" { "Terminate" } }))
+        (view::dialog("override", html! { "Version override" }, act, html! {
+            (target)
+            input type="hidden" name="op" value="override";
+            div.seg {
+                label { input type="radio" name="mode" value="pin" checked; span { "Pin" } }
+                label { input type="radio" name="mode" value="auto"; span { "Auto-upgrade" } }
+                label { input type="radio" name="mode" value="clear"; span { "None" } }
+            }
+            label.field data-show-when="mode=pin" { "Version" input type="text" name="version" placeholder="shop:v2" autocomplete="off" data-1p-ignore; }
+        }, html! { button.btn.primary type="submit" { "Apply" } }))
+    }
+}
+
 pub(crate) async fn detail(State(app): State<App>, Path(name): Path<String>, Query(q): Query<DetailQuery>) -> Response {
     let Some(cell) = app.cell(&name) else { return not_found(&app, &format!("There is no cell named {name}.")) };
     let run = q.run.as_deref().and_then(Id128::parse);
@@ -268,156 +372,117 @@ pub(crate) async fn detail(State(app): State<App>, Path(name): Path<String>, Que
         Ok(other) => Err(unexpected(&other)),
         Err(e) => Err(e),
     };
-    let nav = app.cell_nav(&name, "workflows");
+    let nav = app.cell_nav(&name, "workflows").leaf(&q.id);
     let d = match described {
         Ok(d) => d,
         Err(e) => {
-            let body = html! { div.head { h1.mono { (q.id) } } (error_box("Could not load the workflow", &e)) };
+            let body = html! {
+                (head(html! { h1.mono { (q.id) } }, html! {}, html! {}))
+                (error_box("Could not load the workflow", &e))
+            };
             return page(&q.id, &nav, &q.flash, body).into_response();
         }
     };
     let events = history(&cell, &q.id, Some(d.info.run_id)).await;
-    let here = workflow_href(&name, &q.id, Some(d.info.run_id));
     let act = format!("/cells/{}/workflow/act", enc(&name));
     let run_text = d.info.run_id.to_string();
     let open = !d.info.status.is_closed();
-    let hidden = html! {
-        input type="hidden" name="id" value=(q.id);
-        input type="hidden" name="run" value=(run_text);
-    };
+    let elapsed = if open { view::now() } else { d.info.close_time }.since_ms(d.info.start_time);
     let body = html! {
-        div data-live="head" {
-            div.head {
+        (head(
+            html! {
                 h1.mono { (d.info.workflow_id) }
+                (copy_button(&d.info.workflow_id))
                 (workflow_pill(d.info.status))
-                @if d.cancel_requested && open { (pill("warn", "cancel requested")) }
-            }
-            div.muted { (d.info.workflow_type) " · run " span.mono { (d.info.run_id) } }
-            @if let Some(next) = d.continued_as {
-                p { "Continued as a new run: " a.mono href=(workflow_href(&name, &q.id, Some(next))) { (next) } }
-            }
-            div.tiles {
-                (tile("Started", format!("{} ago", duration_ms(view::now().since_ms(d.info.start_time))), &d.info.start_time.rfc3339()))
-                (tile(if open { "Running for" } else { "Ran for" },
-                    duration_ms(if open { view::now() } else { d.info.close_time }.since_ms(d.info.start_time)), ""))
-                (tile("Events", count(d.info.history_length), ""))
-                (tile("Task queue", &d.info.task_queue, &format!("shard {}", d.info.shard)))
-                (tile("Workflow task", if d.workflow_task.is_empty() { "none" } else { &d.workflow_task }, ""))
-                (tile("Pending", format!("{} / {}", d.pending_activities.len(), d.pending_timers), "activities / timers"))
+                @if d.cancel_requested && open { (pill("warn", "Cancel requested")) }
+            },
+            html! {
+                span { (d.info.workflow_type) }
+                span.sep.mono data-tip="Run ID" { (run_text) }
+                (copy_button(&run_text))
+            },
+            html! {
+                @if open {
+                    button.btn type="button" data-open="signal" { (icon(icons::SEND)) "Signal" }
+                    button.btn type="button" data-open="cancel" { "Cancel" }
+                    (view::menu(html! {
+                        button.menu-item type="button" data-open="override" { (icon(icons::LAYERS)) "Version override" }
+                        button.menu-item.danger type="button" data-open="terminate" { (icon(icons::X)) "Terminate" }
+                    }))
+                }
+            },
+        ))
+        @if let Some(next) = d.continued_as {
+            div.alert.info {
+                (icon(icons::ARROW))
+                div { "Continued as a new run: " a.link.mono href=(workflow_href(&name, &q.id, Some(next))) { (next) } }
             }
         }
-        @if open {
-            div.split {
-                div.panel.pad {
-                    form.stack method="post" action=(act) {
-                        (hidden)
-                        input type="hidden" name="op" value="signal";
-                        label { "Signal name" input type="text" name="name" required placeholder="approve"; }
-                        label { "Input (one JSON value, optional)" textarea name="input" style="min-height:44px" {} }
-                        div { button.primary type="submit" { "Send signal" } }
-                    }
-                }
-                div.panel.pad {
-                    form.stack method="post" action=(act) {
-                        (hidden)
-                        label { "Reason (optional)" input type="text" name="reason"; }
-                        div {
-                            button type="submit" name="op" value="cancel" data-tip="Ask the workflow to stop; it may clean up first." { "Request cancel" }
-                            " "
-                            button.danger type="submit" name="op" value="terminate" data-tip="Stop it now. The workflow gets no chance to clean up." { "Terminate" }
-                        }
-                    }
-                    form.row method="post" action=(act) style="margin-top:16px" {
-                        (hidden)
-                        input type="hidden" name="op" value="override";
-                        label { "Version override" select name="mode" {
-                            option value="pin" { "Pin to version" }
-                            option value="auto" { "Auto-upgrade" }
-                            option value="clear" { "Clear override" }
-                        } }
-                        label { "deployment:build" input type="text" name="version" placeholder="shop:v2"; }
-                        button type="submit" { "Apply" }
-                    }
-                }
-            }
+        div.stats {
+            div.stat { div.label { "Started" } div.value data-tip=(d.info.start_time.rfc3339()) { (view::ago(d.info.start_time)) } }
+            (stat(if open { "Running for" } else { "Ran for" }, duration_ms(elapsed), ""))
+            (stat("Events", count(d.info.history_length), ""))
+            (stat("Pending activities", d.pending_activities.len(), ""))
+            (stat("Pending timers", d.pending_timers, ""))
         }
-        div.split style="margin-top:16px" data-live="io" {
-            div.panel.pad {
-                dl.kv {
-                    dt { "Input" } dd { (payload(&d.input)) }
-                    @if let Some(result) = &d.result { dt { "Result" } dd { (payload(result)) } }
-                    @if let Some(failure) = &d.failure {
-                        dt { "Failure" }
-                        dd { (pill("bad", if failure.kind.is_empty() { "failed" } else { &failure.kind })) " " (failure.message)
-                            @if let Some(details) = &failure.details { (payload(details)) } }
+        div.split.wide-left {
+            div.stack {
+                div.panel.pad { div.panel-title { "Input" } (payload(&d.input)) }
+                @if let Some(result) = &d.result {
+                    div.panel.pad { div.panel-title { "Result" } (payload(result)) }
+                }
+                @if let Some(failure) = &d.failure {
+                    div.panel.pad {
+                        div.panel-title { "Failure" @if !failure.kind.is_empty() { (pill("bad", &failure.kind)) } }
+                        div { (failure.message) }
+                        @if let Some(details) = &failure.details { div style="margin-top:10px" { (payload(details)) } }
                     }
                 }
             }
             div.panel.pad {
                 dl.kv {
+                    dt { "Task queue" } dd { (d.info.task_queue) }
+                    dt { "Shard" } dd { (d.info.shard) }
                     dt { "Version" } dd { (version_text(&d.info.versioning)) }
-                    dt { "Behavior" } dd { (match d.info.versioning.behavior {
-                        VersioningBehavior::Pinned => "pinned: stays on the version that started it",
-                        VersioningBehavior::AutoUpgrade => "auto-upgrade: follows the deployment's current version",
-                        VersioningBehavior::Unspecified => "unspecified (unversioned worker)",
-                    }) }
+                    @match d.info.versioning.behavior {
+                        VersioningBehavior::Pinned => { dt { "Upgrades" } dd { "Pinned" } }
+                        VersioningBehavior::AutoUpgrade => { dt { "Upgrades" } dd { "Automatic" } }
+                        VersioningBehavior::Unspecified => {}
+                    }
+                    @if !matches!(d.workflow_task.as_str(), "" | "none") { dt { "Workflow task" } dd { (sentence(&d.workflow_task)) } }
                     @if !d.info.close_time.is_zero() { dt { "Closed" } dd { (when(d.info.close_time)) } }
                 }
             }
         }
         @if !d.pending_activities.is_empty() {
-            h2 { "Pending activities" }
-            div.panel.scroll data-live="pending" {
+            h2 { "Pending activities" span.count { (d.pending_activities.len()) } }
+            div.panel.scroll {
                 table {
-                    thead { tr { th.num { "Event" } th { "Activity" } th { "State" } th.num { "Attempt" } th { "Task queue" } th { "Last failure" } } }
+                    thead { tr { th { "Activity" } th { "State" } th.num { "Attempt" } th { "Task queue" } th { "Last failure" } } }
                     tbody {
                         @for a in &d.pending_activities {
                             tr {
-                                td.num { (a.scheduled_id) }
-                                td { (a.activity_type) }
-                                td { (pill(match a.state.as_str() { "started" => "info", "backoff" => "warn", _ => "muted" }, &a.state)) }
+                                td { (a.activity_type) " " span.faint { "#" (a.scheduled_id) } }
+                                td { (pill(match a.state.as_str() { "started" => "info pulse", "backoff" => "warn", _ => "muted" }, &sentence(&a.state))) }
                                 td.num { (a.attempt) }
-                                td { (a.task_queue) }
-                                td.wrap { @match &a.last_failure { Some(f) => (f.to_string()), None => span.muted { "—" } } }
+                                td.muted { (a.task_queue) }
+                                td.wrap { @match &a.last_failure { Some(f) => (f.to_string()), None => span.faint { "—" } } }
                             }
                         }
                     }
                 }
             }
         }
-        h2 { "History" }
-        div.panel.scroll data-live="history" {
+        h2 { "History" span.count { (count(d.info.history_length)) } }
+        div.panel {
             @match &events {
-                Err(e) => (error_box("Could not load the history", e)),
-                Ok(events) => {
-                    @let first = events.first().map_or(d.info.start_time, |e| e.time);
-                    table {
-                        thead { tr { th.num { "#" } th { "At" } th { "Event" } th { "Details" } } }
-                        tbody {
-                            @for e in events {
-                                tr {
-                                    td.num.muted { (e.id) }
-                                    td.tight.mono data-tip=(e.time.rfc3339()) { "+" (format!("{:.3}", e.time.micros().saturating_sub(first.micros()) as f64 / 1e6)) "s" }
-                                    td.tight { (pill(event_kind(&e.attrs), e.attrs.name())) }
-                                    td.wrap {
-                                        @for (key, value) in event_fields(&e.attrs) {
-                                            @if value.is_object() || value.is_array() {
-                                                div { span.muted { (key) } pre.json { (serde_json::to_string_pretty(&value).unwrap_or_default()) } }
-                                            } @else {
-                                                span style="margin-right:14px" { span.muted { (key) " " } span.mono { (view::inline_json(&value)) } }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                Err(e) => div.pad { (error_box("Could not load the history", e)) },
+                Ok(events) => (timeline(events, events.first().map_or(d.info.start_time, |e| e.time))),
             }
         }
-        p.muted { a href=(here) { "Permalink to this run" } }
+        @if open { (workflow_dialogs(&act, &q.id, &run_text)) }
     };
-    page(&q.id, &nav, &q.flash, body).into_response()
+    page(&q.id, &nav.polling(open), &q.flash, body).into_response()
 }
 
 #[derive(Deserialize)]
