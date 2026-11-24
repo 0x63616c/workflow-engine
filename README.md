@@ -128,3 +128,7 @@ docs (`cargo doc -p wfe-sdk --open`) show a worker and a client;
 Authentication (bind the HTTP ports and the UI to a trusted network),
 namespaces, changing a cell's shard count, child workflows, schedules,
 queries and updates.
+
+## License
+
+[MIT](LICENSE).

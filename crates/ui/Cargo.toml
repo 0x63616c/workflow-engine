@@ -4,6 +4,7 @@ description = "The WFE management UI: cells, replication, workflows, deployments
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

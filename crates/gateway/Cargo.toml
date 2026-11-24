@@ -4,6 +4,7 @@ description = "The stateless front door of a cell: routes API calls to shards, l
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

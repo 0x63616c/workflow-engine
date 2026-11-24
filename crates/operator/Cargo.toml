@@ -4,6 +4,7 @@ description = "The WFE Kubernetes operator: cells, replication between them, and
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

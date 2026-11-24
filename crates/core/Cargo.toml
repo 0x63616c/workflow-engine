@@ -4,6 +4,7 @@ description = "Deterministic foundations shared by every WFE crate: ids, PRNG, c
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

@@ -4,6 +4,7 @@ description = "Workspace rules no linter can express: crate classification, the 
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dev-dependencies]
