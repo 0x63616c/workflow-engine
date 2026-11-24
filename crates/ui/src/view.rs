@@ -40,6 +40,8 @@ pub(crate) mod icons {
     pub(crate) const SHIELD: &str =
         r#"<path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/>"#;
     pub(crate) const FLAG: &str = r#"<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>"#;
+    pub(crate) const CLOCK: &str = r#"<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>"#;
+    pub(crate) const BOLT: &str = r#"<path d="M13 3 5 13.5h6L10 21l8-10.5h-6z"/>"#;
     pub(crate) const SEND: &str = r#"<path d="M21 3 10 14M21 3l-7 18-4-7-7-4z"/>"#;
 }
 

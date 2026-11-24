@@ -8,7 +8,7 @@ use axum::response::{IntoResponse, Response};
 use maud::{Markup, html};
 use serde::Deserialize;
 use wfe_core::api::*;
-use wfe_core::{Error, Id128, Payload};
+use wfe_core::{Error, Id128, Payload, Timestamp};
 
 fn workflow_href(cell: &str, id: &str, run: Option<Id128>) -> String {
     let run = run.map(|r| format!("&run={r}")).unwrap_or_default();
@@ -297,11 +297,147 @@ fn spaced(name: &str) -> String {
     out
 }
 
+struct Span {
+    label: String,
+    note: String,
+    glyph: &'static str,
+    tone: &'static str,
+    start: Timestamp,
+    end: Option<Timestamp>,
+    event: u64,
+    instant: bool,
+}
+
+fn spans(events: &[Event]) -> Vec<Span> {
+    let mut spans: Vec<Span> = Vec::new();
+    let close = |spans: &mut Vec<Span>, opened_by: u64, at: Timestamp, tone: &'static str| {
+        if let Some(span) = spans.iter_mut().find(|s| s.event == opened_by && !s.instant) {
+            span.end = Some(at);
+            span.tone = tone;
+        }
+    };
+    let instant = |label: &str, tone: &'static str, e: &Event| Span {
+        label: label.to_string(),
+        note: String::new(),
+        glyph: icons::SEND,
+        tone,
+        start: e.time,
+        end: Some(e.time),
+        event: e.id,
+        instant: true,
+    };
+    for e in events {
+        match &e.attrs {
+            EventAttrs::ActivityScheduled { options, .. } => spans.push(Span {
+                label: options.activity_type.clone(),
+                note: String::new(),
+                glyph: icons::BOLT,
+                tone: "info",
+                start: e.time,
+                end: None,
+                event: e.id,
+                instant: false,
+            }),
+            EventAttrs::ActivityStarted { scheduled_id, attempt, .. } => {
+                if let Some(span) = spans.iter_mut().find(|s| s.event == *scheduled_id).filter(|_| *attempt > 1) {
+                    span.note = format!("{attempt} attempts");
+                }
+            }
+            EventAttrs::ActivityCompleted { scheduled_id, .. } => close(&mut spans, *scheduled_id, e.time, "good"),
+            EventAttrs::ActivityFailed { scheduled_id, .. } => close(&mut spans, *scheduled_id, e.time, "bad"),
+            EventAttrs::ActivityTimedOut { scheduled_id, .. } => close(&mut spans, *scheduled_id, e.time, "serious"),
+            EventAttrs::TimerStarted { fire_after_ms } => spans.push(Span {
+                label: "Timer".to_string(),
+                note: duration_ms(*fire_after_ms),
+                glyph: icons::CLOCK,
+                tone: "info",
+                start: e.time,
+                end: None,
+                event: e.id,
+                instant: false,
+            }),
+            EventAttrs::TimerFired { started_id } => close(&mut spans, *started_id, e.time, "muted"),
+            EventAttrs::TimerCanceled { started_id } => close(&mut spans, *started_id, e.time, "warn"),
+            EventAttrs::SignalReceived { name, .. } => spans.push(instant(name, "info", e)),
+            EventAttrs::CancelRequested { .. } => spans.push(instant("Cancel requested", "warn", e)),
+            EventAttrs::WorkflowStarted { .. }
+            | EventAttrs::WorkflowTaskScheduled { .. }
+            | EventAttrs::WorkflowTaskStarted { .. }
+            | EventAttrs::WorkflowTaskCompleted { .. }
+            | EventAttrs::WorkflowTaskFailed { .. }
+            | EventAttrs::WorkflowTaskTimedOut { .. }
+            | EventAttrs::MarkerRecorded { .. }
+            | EventAttrs::VersioningOverrideChanged { .. }
+            | EventAttrs::WorkflowCompleted { .. }
+            | EventAttrs::WorkflowFailed { .. }
+            | EventAttrs::WorkflowCanceled
+            | EventAttrs::WorkflowTerminated { .. }
+            | EventAttrs::WorkflowTimedOut
+            | EventAttrs::WorkflowContinuedAsNew { .. } => {}
+        }
+    }
+    spans
+}
+
+const GANTT_ROWS: usize = 200;
+
+fn gantt(info: &WorkflowInfo, spans: &[Span], start: Timestamp, end: Timestamp) -> Markup {
+    let total_ms = end.since_ms(start).max(1);
+    let percent = |t: Timestamp| (t.since_ms(start) as f64 / total_ms as f64 * 100.0).clamp(0.0, 100.0);
+    let root_tone = if info.status.is_closed() { "root" } else { "root open" };
+    html! {
+        div.panel.gantt {
+            div.gantt-axis {
+                span {}
+                div.gantt-ticks {
+                    @for quarter in 0..=4u64 {
+                        span style=(format!("left:{}%", quarter * 25)) {
+                            @if quarter == 0 { "0" } @else { (duration_ms(total_ms * quarter / 4)) }
+                        }
+                    }
+                }
+                span {}
+            }
+            div.gantt-row {
+                span.gantt-label { (icon(icons::WORKFLOW)) b { (info.workflow_type) } }
+                span.gantt-track { span class=(format!("gantt-bar {root_tone}")) style="left:0%;width:100%" {} }
+                span.gantt-dur { (duration_ms(total_ms)) }
+            }
+            @for s in spans.iter().take(GANTT_ROWS) {
+                @let left = percent(s.start);
+                @let width = percent(s.end.unwrap_or(end)) - left;
+                @let class = format!("gantt-bar {}{}{}", s.tone, if s.end.is_none() { " open" } else { "" }, if s.instant { " point" } else { "" });
+                a.gantt-row href=(format!("#e{}", s.event)) data-tip=(format!("Event #{} at +{}", s.event, duration_ms(s.start.since_ms(start)))) {
+                    span.gantt-label {
+                        (icon(s.glyph))
+                        b { (s.label) }
+                        @if !s.note.is_empty() { small { (s.note) } }
+                    }
+                    span.gantt-track {
+                        @if s.instant {
+                            span class=(class) style=(format!("left:{left:.3}%")) {}
+                        } @else {
+                            span class=(class) style=(format!("left:{left:.3}%;width:{width:.3}%")) {}
+                        }
+                    }
+                    span.gantt-dur {
+                        @if s.instant { "+" (duration_ms(s.start.since_ms(start))) }
+                        @else { (duration_ms(s.end.unwrap_or(end).since_ms(s.start))) }
+                    }
+                }
+            }
+            @if spans.len() > GANTT_ROWS {
+                div.gantt-more { "Showing the first " (GANTT_ROWS) " of " (count(u64::try_from(spans.len()).unwrap_or(u64::MAX))) }
+            }
+        }
+    }
+}
+
 fn timeline(events: &[Event], first: wfe_core::Timestamp) -> Markup {
     html! {
         ol.timeline {
             @for e in events {
-                li class=(format!("ev {}", event_kind(&e.attrs))) {
+                li id=(format!("e{}", e.id)) class=(format!("ev {}", event_kind(&e.attrs))) {
                     span.ev-dot {}
                     div.ev-main {
                         span.ev-name { (spaced(e.attrs.name())) }
@@ -424,6 +560,15 @@ pub(crate) async fn detail(State(app): State<App>, Path(name): Path<String>, Que
             (stat("Events", count(d.info.history_length), ""))
             (stat("Pending activities", d.pending_activities.len(), ""))
             (stat("Pending timers", d.pending_timers, ""))
+        }
+        @if let Ok(events) = &events {
+            @let spans = spans(events);
+            @if !spans.is_empty() {
+                @let start = events.first().map_or(d.info.start_time, |e| e.time);
+                @let end = if open { view::now() } else { events.last().map_or(d.info.close_time, |e| e.time) };
+                h2 { "Timeline" span.count { (spans.len()) } }
+                (gantt(&d.info, &spans, start, end))
+            }
         }
         div.split.wide-left {
             div.stack {

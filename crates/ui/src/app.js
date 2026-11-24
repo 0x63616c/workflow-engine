@@ -386,6 +386,17 @@
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const link = target.closest("a[href]");
     if (link) {
+      const anchor = link.getAttribute("href");
+      if (anchor.startsWith("#")) {
+        event.preventDefault();
+        const to = document.getElementById(anchor.slice(1));
+        if (!to) return;
+        to.scrollIntoView({ behavior: "smooth", block: "center" });
+        to.classList.remove("flash");
+        void to.offsetWidth;
+        to.classList.add("flash");
+        return;
+      }
       if (link.target || link.hasAttribute("download") || link.origin !== location.origin || link.pathname.startsWith("/assets/")) return;
       event.preventDefault();
       visit(link.href);
