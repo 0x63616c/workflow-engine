@@ -202,9 +202,33 @@ pub struct Engine {
 struct PrimaryVolatile {
     drive_at: Timestamp,
     proposed: BTreeSet<Vec<u8>>,
-    counts: BTreeMap<(DeploymentVersion, u64), BTreeMap<ShardId, u64>>,
+    drainage: BTreeMap<DeploymentVersion, DrainageTally>,
     transfers: BTreeMap<CellId, BTreeMap<ExecKey, Transfer>>,
     shipped: BTreeMap<CellId, BTreeMap<ExecKey, u64>>,
+}
+
+#[derive(Default)]
+struct DrainageTally {
+    nonce: u64,
+    counts: BTreeMap<ShardId, u64>,
+    proposed: bool,
+}
+
+impl DrainageTally {
+    fn record(&mut self, nonce: u64, shard: ShardId, count: u64, shard_count: u32) -> Option<u64> {
+        if nonce > self.nonce {
+            *self = Self { nonce, ..Self::default() };
+        }
+        if nonce < self.nonce || self.proposed {
+            return None;
+        }
+        self.counts.insert(shard, count);
+        if u32::try_from(self.counts.len()) != Ok(shard_count) {
+            return None;
+        }
+        self.proposed = true;
+        Some(std::mem::take(&mut self.counts).into_values().sum())
+    }
 }
 
 impl PrimaryVolatile {
@@ -983,7 +1007,7 @@ impl StateMachine for Engine {
 
     fn open(&mut self, store: &mut Store) -> Result<(), StorageError> {
         self.primary.proposed.clear();
-        self.primary.counts.clear();
+        self.primary.drainage.clear();
         self.primary.transfers.clear();
         self.primary.shipped.clear();
         self.primary.drive_at = Timestamp::ZERO;
@@ -1116,11 +1140,8 @@ impl StateMachine for Engine {
                 fx.send.push((from, EnginePacket::PinnedCount { version, nonce, shard: me, count }));
             }
             EnginePacket::PinnedCount { version, nonce, shard, count } => {
-                let counts = self.primary.counts.entry((version.clone(), nonce)).or_default();
-                counts.insert(shard, count);
-                if u32::try_from(counts.len()) == Ok(self.shard.cfg.shard_count) {
-                    let count = counts.values().sum();
-                    self.primary.counts.retain(|(v, _), _| *v != version);
+                let tally = self.primary.drainage.entry(version.clone()).or_default();
+                if let Some(count) = tally.record(nonce, shard, count, self.shard.cfg.shard_count) {
                     self.propose_once(fx, Op::DrainageResult { version, nonce, count });
                 }
             }
@@ -1158,5 +1179,31 @@ impl StateMachine for Engine {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DrainageTally;
+
+    #[test]
+    fn a_drainage_round_sums_one_count_per_shard_once() {
+        let mut tally = DrainageTally::default();
+        assert_eq!(tally.record(1, 0, 2, 2), None);
+        assert_eq!(tally.record(1, 0, 2, 2), None);
+        assert_eq!(tally.record(1, 1, 3, 2), Some(5));
+        assert_eq!(tally.record(1, 1, 3, 2), None);
+        assert_eq!(tally.record(1, 0, 2, 2), None);
+    }
+
+    #[test]
+    fn late_counts_never_fill_in_a_newer_round() {
+        let mut tally = DrainageTally::default();
+        assert_eq!(tally.record(1, 0, 0, 2), None);
+        assert_eq!(tally.record(1, 1, 0, 2), Some(0));
+        assert_eq!(tally.record(1, 0, 0, 2), None);
+        assert_eq!(tally.record(2, 0, 0, 2), None);
+        assert_eq!(tally.record(1, 1, 0, 2), None);
+        assert_eq!(tally.record(2, 1, 1, 2), Some(1));
     }
 }
