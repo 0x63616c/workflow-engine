@@ -67,6 +67,9 @@ pub struct WfState {
     pub unseen: bool,
     pub last_completed_wft: u64,
     pub versioning: WorkflowVersioning,
+    /// The version of the worker holding the workflow task while `wft` is
+    /// `Started`: that task may complete pinned to it, so drainage counts it.
+    pub wft_version: Option<DeploymentVersion>,
     pub cancel_requested: bool,
     pub start_request: Id128,
     /// Recent signal request ids, for deduplication.
@@ -367,6 +370,7 @@ pub fn start_wft(tx: &mut Tx, task: &LogicalTask, worker: &WorkerInfo) -> Fallib
         },
     )?;
     st.wft = Wft::Started { scheduled_id, started_id, attempt };
+    st.wft_version = worker.version.clone();
     st.unseen = false;
     let timeout = tx.shard.cfg.workflow_task_timeout_ms;
     tx.add_task(Some(tx.now.add_ms(timeout)), None, false, &WfTask::WftTimeout { scheduled_id, attempt });
@@ -832,6 +836,14 @@ pub fn fire(tx: &mut Tx, task: &LogicalTask) -> Result<(), StorageError> {
     tx.put(STATE, &st)
 }
 
+fn drainage_version(st: &WfState) -> Option<&DeploymentVersion> {
+    let in_flight = match st.wft {
+        Wft::Started { .. } => st.wft_version.as_ref(),
+        Wft::None | Wft::Backoff { .. } | Wft::Scheduled { .. } => None,
+    };
+    st.versioning.pinned().or(in_flight)
+}
+
 pub fn summary(tx: &mut Tx) -> Result<Summary, StorageError> {
     let Some(st) = tx.get::<WfState>(STATE)? else { return Ok(Summary::default()) };
     let open = !st.status.is_closed();
@@ -840,6 +852,6 @@ pub fn summary(tx: &mut Tx) -> Result<Summary, StorageError> {
     Ok(Summary {
         visibility: Some((suffix, encode(&info(tx, &st)))),
         open,
-        counted: if open { st.versioning.pinned().cloned() } else { None },
+        counted: if open { drainage_version(&st).cloned() } else { None },
     })
 }

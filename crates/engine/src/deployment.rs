@@ -56,6 +56,11 @@ pub struct DepState {
     /// Routing revision each shard has acknowledged.
     pub acked: BTreeMap<ShardId, u64>,
     pub deleted: bool,
+    /// The last drainage generation handed out to any of its versions. Kept
+    /// here, not on the version, so a build that is deleted and registers
+    /// again never reuses a generation whose late shard counts are still in
+    /// flight.
+    pub drain_nonces: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +82,12 @@ fn changed(tx: &mut Tx, st: &mut DepState) {
     tx.add_task(None, None, true, &DepTask::Propagate { revision: st.routing.revision });
 }
 
+fn next_drain_nonce(drain_nonces: &mut u64, version: &mut Version) -> u64 {
+    *drain_nonces += 1;
+    version.drain_nonce = *drain_nonces;
+    version.drain_nonce
+}
+
 fn set_status(tx: &mut Tx, st: &mut DepState, build_id: &str, status: VersionStatus) {
     let interval = tx.shard.cfg.drainage_interval_ms;
     let now = tx.now;
@@ -87,8 +98,7 @@ fn set_status(tx: &mut Tx, st: &mut DepState, build_id: &str, status: VersionSta
     version.status = status;
     version.status_changed_at = now;
     if status == VersionStatus::Draining {
-        version.drain_nonce += 1;
-        let nonce = version.drain_nonce;
+        let nonce = next_drain_nonce(&mut st.drain_nonces, version);
         tx.add_task(
             Some(now.add_ms(interval)),
             None,
@@ -108,6 +118,7 @@ fn recreate_keeping_routing_revision(deleted: &DepState, now: Timestamp) -> DepS
     DepState {
         created_at: now,
         routing: RoutingConfig { revision: deleted.routing.revision, ..RoutingConfig::default() },
+        drain_nonces: deleted.drain_nonces,
         ..DepState::default()
     }
 }
@@ -121,8 +132,8 @@ pub fn resume_on_promoted_cell(tx: &mut Tx) -> Result<(), StorageError> {
     let now = tx.now;
     for (build_id, version) in &mut st.versions {
         if version.status == VersionStatus::Draining {
-            version.drain_nonce += 1;
-            let check = DepTask::DrainCheck { build_id: build_id.clone(), nonce: version.drain_nonce };
+            let nonce = next_drain_nonce(&mut st.drain_nonces, version);
+            let check = DepTask::DrainCheck { build_id: build_id.clone(), nonce };
             tx.add_task(Some(now.add_ms(interval)), None, false, &check);
         }
     }
@@ -336,8 +347,7 @@ pub fn drainage_result(tx: &mut Tx, build_id: &str, nonce: u64, count: u64) -> R
         version.status = VersionStatus::Drained;
         version.status_changed_at = now;
     } else {
-        version.drain_nonce += 1;
-        let nonce = version.drain_nonce;
+        let nonce = next_drain_nonce(&mut st.drain_nonces, version);
         tx.add_task(
             Some(now.add_ms(interval)),
             None,
