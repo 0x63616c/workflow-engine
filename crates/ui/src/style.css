@@ -455,7 +455,7 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; display: flex; align-items: cente
 .gantt-label small { color: var(--text-3); font-size: 12px; }
 .gantt-track { position: relative; height: 100%; background-image: linear-gradient(to right, var(--line) 1px, transparent 1px); background-size: 25% 100%; border-right: 1px solid var(--line); }
 .gantt-bar { position: absolute; top: 10px; height: 12px; min-width: 4px; border-radius: 3px; background: var(--tone); --tone: var(--text-3); transition: left 0.5s var(--ease), width 0.5s var(--ease); }
-.gantt-bar.root { top: 13px; height: 6px; --tone: var(--text); }
+.gantt-bar.root { --tone: var(--text); }
 .gantt-bar.good { --tone: var(--good); }
 .gantt-bar.info { --tone: var(--info); }
 .gantt-bar.warn { --tone: var(--warn); }
