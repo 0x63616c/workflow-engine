@@ -191,7 +191,7 @@ fn replicate_dialog(all: &Described, from: Option<&str>, back: &str) -> Markup {
     )
 }
 
-fn failover_dialog(all: &Described) -> Markup {
+fn failover_dialog(all: &Described, back: &str) -> Markup {
     let active = first_with_role(all, "active");
     let standby = first_with_role(all, "standby");
     view::dialog(
@@ -199,6 +199,7 @@ fn failover_dialog(all: &Described) -> Markup {
         html! { "Fail over" },
         "/failover",
         html! {
+            input type="hidden" name="back" value=(back);
             p { "The new cell takes over writes. The old one becomes its standby." }
             div.field-row {
                 label.field { "From" select name="from" autofocus { (cell_options(all, active, None)) } }
@@ -216,28 +217,44 @@ fn failover_dialog(all: &Described) -> Markup {
 pub(crate) async fn overview(State(app): State<App>, Query(flash): Query<Flash>) -> Markup {
     let all = app.describe_all().await;
     let names = names(&all);
-    let many = all.len() > 1;
-    let links = links_table(&all, None, "/");
     let body = html! {
-        (head(html! { h1 { "Cells" } }, html! {}, html! {
+        (head(html! { h1 { "Cells" } }, html! {}, html! {}))
+        div.cards {
+            @for (cell, info) in &all { (cell_card(cell, info, &names)) }
+        }
+    };
+    page("Cells", &app.nav("cells"), &flash, body)
+}
+
+pub(crate) async fn links(State(app): State<App>, Query(flash): Query<Flash>) -> Markup {
+    let all = app.describe_all().await;
+    let many = all.len() > 1;
+    let back = "/replication";
+    let body = html! {
+        (head(html! { h1 { "Replication" } }, html! {}, html! {
             @if many {
                 button.btn type="button" data-open="failover" { (icon(icons::SWAP)) "Fail over" }
                 button.btn.primary type="button" data-open="replicate" { (icon(icons::PLUS)) "Replicate" }
             }
         }))
-        div.cards {
-            @for (cell, info) in &all { (cell_card(cell, info, &names)) }
-        }
-        @if let Some(links) = links {
-            h2 { "Replication" }
-            (links)
+        @match links_table(&all, None, back) {
+            Some(table) => (table),
+            None => div.panel {
+                (view::empty(icons::SWAP, "Nothing is replicating", html! {
+                    @if many {
+                        button.btn type="button" data-open="replicate" { "Replicate a cell" }
+                    } @else {
+                        span { "Replication needs a second cell." }
+                    }
+                }))
+            },
         }
         @if many {
-            (replicate_dialog(&all, None, "/"))
-            (failover_dialog(&all))
+            (replicate_dialog(&all, None, back))
+            (failover_dialog(&all, back))
         }
     };
-    page("Cells", &app.nav("cells"), &flash, body)
+    page("Replication", &app.nav("replication"), &flash, body)
 }
 
 fn role_action(back: &str, role: &'static str) -> Markup {

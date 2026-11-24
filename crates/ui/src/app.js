@@ -91,6 +91,12 @@
     for (let i = fresh.length; i < old.length; i++) old[i].remove();
   }
 
+  function rememberCell() {
+    const cell = $("#side").dataset.cell;
+    if (cell) document.cookie = "wfe_cell=" + encodeURIComponent(cell) + "; path=/; max-age=31536000; samesite=lax";
+  }
+  rememberCell();
+
   function apply(doc, url, options) {
     document.title = doc.title;
     morph($("#side"), $("#side", doc));
@@ -101,6 +107,7 @@
     if (options.push) history.pushState({}, "", url);
     else history.replaceState(history.state, "", url);
     document.body.classList.remove("side-open", "offline");
+    rememberCell();
   }
 
   function showSkeleton() {
@@ -305,7 +312,8 @@
     const list = $(".menu-list", menu);
     const anchor = $("summary", menu).getBoundingClientRect();
     const below = anchor.bottom + 6;
-    list.style.left = Math.max(8, anchor.right - list.offsetWidth) + "px";
+    if (menu.classList.contains("switcher")) list.style.minWidth = anchor.width + "px";
+    list.style.left = (menu.classList.contains("switcher") ? anchor.left : Math.max(8, anchor.right - list.offsetWidth)) + "px";
     list.style.top = (below + list.offsetHeight > innerHeight - 8 ? anchor.top - list.offsetHeight - 6 : below) + "px";
   }, true);
   addEventListener("resize", () => closeMenus());

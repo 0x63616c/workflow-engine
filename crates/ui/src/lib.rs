@@ -15,7 +15,9 @@ mod view;
 mod workflows;
 
 use axum::Router;
+use axum::extract::Request;
 use axum::http::header;
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use std::net::SocketAddr;
@@ -112,6 +114,20 @@ pub(crate) struct Ui {
 
 pub(crate) type App = Arc<Ui>;
 
+tokio::task_local! {
+    static CHOSEN_CELL_COOKIE: Option<String>;
+}
+
+async fn with_chosen_cell(request: Request, next: Next) -> Response {
+    let chosen = request
+        .headers()
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|cookies| cookies.split(';').find_map(|cookie| cookie.trim().strip_prefix("wfe_cell=")))
+        .map(str::to_string);
+    CHOSEN_CELL_COOKIE.scope(chosen, next.run(request)).await
+}
+
 impl Ui {
     pub(crate) fn cell(&self, name: &str) -> Option<Arc<Cell>> {
         self.cells.iter().find(|c| c.name == name).cloned()
@@ -121,8 +137,20 @@ impl Ui {
         self.cells.iter().map(|c| c.name.clone()).collect()
     }
 
+    fn chosen_cell(&self) -> Option<String> {
+        let cookie = CHOSEN_CELL_COOKIE.try_with(Clone::clone).ok().flatten();
+        let names = || self.cells.iter().map(|c| &c.name);
+        names().find(|name| cookie.as_deref() == Some(view::enc(name).as_str())).or_else(|| names().next()).cloned()
+    }
+
     pub(crate) fn nav(&self, section: &'static str) -> view::Nav {
-        view::Nav { section, cells: self.cell_names(), polls_for_changes: true, ..view::Nav::default() }
+        view::Nav {
+            section,
+            cells: self.cell_names(),
+            chosen: self.chosen_cell(),
+            polls_for_changes: true,
+            ..view::Nav::default()
+        }
     }
 
     pub(crate) fn cell_nav(&self, cell: &str, tab: &'static str) -> view::Nav {
@@ -130,6 +158,7 @@ impl Ui {
             section: "cells",
             cells: self.cell_names(),
             cell: Some(cell.to_string()),
+            chosen: Some(cell.to_string()),
             tab,
             leaf: None,
             polls_for_changes: true,
@@ -167,7 +196,7 @@ pub(crate) fn not_found(app: &Ui, what: &str) -> Response {
         div.panel {
             (view::empty(view::icons::SEARCH, "Not found", maud::html! {
                 span { (what) }
-                a.btn href="/" { "Back to overview" }
+                a.btn href="/" { "Back to cells" }
             }))
         }
     };
@@ -199,13 +228,19 @@ pub fn router(config: UiConfig) -> Router {
         .route("/cells/{cell}/workflow/act", post(workflows::act))
         .route("/cells/{cell}/deployments", get(deployments::list))
         .route("/cells/{cell}/deployments/act", post(deployments::act))
-        .route("/dst", get(dst::dashboard))
+        .route("/replication", get(cells::links))
+        .route("/dst", get(dst::overview))
+        .route("/dst/failures", get(dst::failures))
+        .route("/dst/runs", get(dst::runs))
+        .route("/dst/coverage", get(dst::coverage))
+        .route("/dst/findings", get(dst::findings))
         .route("/assets/style.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], view::CSS) }))
         .route(
             "/assets/app.js",
             get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], view::JS) }),
         )
         .route("/healthz", get(|| async { "ok" }))
+        .layer(axum::middleware::from_fn(with_chosen_cell))
         .with_state(app)
 }
 

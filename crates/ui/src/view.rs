@@ -34,6 +34,12 @@ pub(crate) mod icons {
     pub(crate) const MENU: &str = r#"<path d="M4 7h16M4 12h16M4 17h16"/>"#;
     pub(crate) const ARROW: &str = r#"<path d="M5 12h14M13 6l6 6-6 6"/>"#;
     pub(crate) const SWAP: &str = r#"<path d="M4 8h14M14 4l4 4-4 4M20 16H6M10 12l-4 4 4 4"/>"#;
+    pub(crate) const SELECT: &str = r#"<path d="m8 9 4-4 4 4M8 15l4 4 4-4"/>"#;
+    pub(crate) const SERVER: &str = r#"<rect x="3.5" y="4" width="17" height="6.5" rx="1.5"/><rect x="3.5" y="13.5" width="17" height="6.5" rx="1.5"/><path d="M7 7.25h.01M7 16.75h.01"/>"#;
+    pub(crate) const LIST: &str = r#"<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>"#;
+    pub(crate) const SHIELD: &str =
+        r#"<path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/>"#;
+    pub(crate) const FLAG: &str = r#"<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>"#;
     pub(crate) const SEND: &str = r#"<path d="M21 3 10 14M21 3l-7 18-4-7-7-4z"/>"#;
 }
 
@@ -50,6 +56,7 @@ pub(crate) struct Nav {
     pub section: &'static str,
     pub cells: Vec<String>,
     pub cell: Option<String>,
+    pub chosen: Option<String>,
     pub tab: &'static str,
     pub leaf: Option<String>,
     pub polls_for_changes: bool,
@@ -58,6 +65,11 @@ pub(crate) struct Nav {
 impl Nav {
     pub(crate) fn leaf(mut self, leaf: &str) -> Nav {
         self.leaf = Some(leaf.to_string());
+        self
+    }
+
+    pub(crate) fn tab(mut self, tab: &'static str) -> Nav {
+        self.tab = tab;
         self
     }
 
@@ -71,16 +83,21 @@ impl Nav {
         if let Some(cell) = &self.cell {
             let base = format!("/cells/{}", enc(cell));
             crumbs.push((cell.clone(), base.clone()));
-            if self.tab == "workflows" {
-                crumbs.push(("Workflows".to_string(), format!("{base}/workflows")));
-            }
-            if self.tab == "deployments" {
-                crumbs.push(("Deployments".to_string(), format!("{base}/deployments")));
-            }
+            let (label, path) = match self.tab {
+                "workflows" => ("Workflows", "/workflows"),
+                "deployments" => ("Deployments", "/deployments"),
+                _ => ("Cluster", ""),
+            };
+            crumbs.push((label.to_string(), format!("{base}{path}")));
         } else if self.section == "cells" {
-            crumbs.push(("Overview".to_string(), "/".to_string()));
+            crumbs.push(("Cells".to_string(), "/".to_string()));
+        } else if self.section == "replication" {
+            crumbs.push(("Replication".to_string(), "/replication".to_string()));
         } else if self.section == "dst" {
             crumbs.push(("Simulation".to_string(), "/dst".to_string()));
+            if !self.tab.is_empty() {
+                crumbs.push((sentence(self.tab), format!("/dst/{}", self.tab)));
+            }
         }
         if let Some(leaf) = &self.leaf {
             crumbs.push((leaf.clone(), String::new()));
@@ -97,26 +114,58 @@ pub(crate) struct Flash {
     pub err: Option<String>,
 }
 
-fn sidebar(nav: &Nav) -> Markup {
+fn item(on: bool, href: &str, glyph: &str, label: &str) -> Markup {
+    html! { a.item.on[on] href=(href) { (icon(glyph)) span { (label) } } }
+}
+
+fn switcher(nav: &Nav, chosen: &str) -> Markup {
+    let same_page = match (nav.cell.is_some(), nav.tab) {
+        (true, "deployments") => "/deployments",
+        (true, "overview") => "",
+        _ => "/workflows",
+    };
     html! {
-        aside.side #side {
-            a.brand href="/" { span.logo { (icon(icons::LOGO)) } "WFE" }
-            nav.side-nav {
-                a.item.on[nav.section == "cells" && nav.cell.is_none()] href="/" { (icon(icons::GRID)) span { "Overview" } }
-                div.side-label { "Cells" }
-                @for name in &nav.cells {
-                    @let base = format!("/cells/{}", enc(name));
-                    @let here = nav.cell.as_deref() == Some(name.as_str());
-                    a.item.on[here && nav.tab == "overview"].open[here] href=(base) { (icon(icons::CELL)) span { (name) } }
-                    @if here || nav.cells.len() == 1 {
-                        div.subnav {
-                            a.on[here && nav.tab == "workflows"] href=(format!("{base}/workflows")) { "Workflows" }
-                            a.on[here && nav.tab == "deployments"] href=(format!("{base}/deployments")) { "Deployments" }
+        @if nav.cells.len() > 1 {
+            details.menu.switcher {
+                summary.switch aria-label="Switch cell" { (icon(icons::CELL)) span { (chosen) } (icon(icons::SELECT)) }
+                div.menu-list {
+                    @for name in &nav.cells {
+                        a.menu-item href=(format!("/cells/{}{same_page}", enc(name))) {
+                            (icon(icons::CELL)) span { (name) }
+                            @if name.as_str() == chosen { span.check { (icon(icons::CHECK)) } }
                         }
                     }
                 }
-                div.side-label { "Testing" }
-                a.item.on[nav.section == "dst"] href="/dst" { (icon(icons::PULSE)) span { "Simulation" } }
+            }
+        } @else {
+            div.switcher.switch { (icon(icons::CELL)) span { (chosen) } }
+        }
+    }
+}
+
+fn sidebar(nav: &Nav) -> Markup {
+    let in_cell = |tab: &str| nav.cell.is_some() && nav.tab == tab;
+    let in_dst = |tab: &str| nav.section == "dst" && nav.tab == tab;
+    html! {
+        aside.side #side data-cell=[nav.cell.as_deref()] {
+            a.brand href="/" { span.logo { (icon(icons::LOGO)) } "WorkflowEngine" }
+            nav.side-nav {
+                @if let Some(chosen) = &nav.chosen {
+                    @let base = format!("/cells/{}", enc(chosen));
+                    (switcher(nav, chosen))
+                    (item(in_cell("workflows"), &format!("{base}/workflows"), icons::WORKFLOW, "Workflows"))
+                    (item(in_cell("deployments"), &format!("{base}/deployments"), icons::LAYERS, "Deployments"))
+                    (item(in_cell("overview"), &base, icons::SERVER, "Cluster"))
+                }
+                div.side-label { "Platform" }
+                (item(nav.section == "cells" && nav.cell.is_none(), "/", icons::GRID, "Cells"))
+                (item(nav.section == "replication", "/replication", icons::SWAP, "Replication"))
+                div.side-label { "Simulation" }
+                (item(in_dst(""), "/dst", icons::PULSE, "Overview"))
+                (item(in_dst("failures"), "/dst/failures", icons::ALERT, "Failures"))
+                (item(in_dst("runs"), "/dst/runs", icons::LIST, "Runs"))
+                (item(in_dst("coverage"), "/dst/coverage", icons::SHIELD, "Coverage"))
+                (item(in_dst("findings"), "/dst/findings", icons::FLAG, "Findings"))
             }
         }
     }
@@ -151,7 +200,7 @@ pub(crate) fn page(title: &str, nav: &Nav, flash: &Flash, body: Markup) -> Marku
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
-                title { (title) " · WFE" }
+                title { (title) " · WorkflowEngine" }
                 script { (PreEscaped(THEME_BEFORE_FIRST_PAINT)) }
                 link rel="stylesheet" href="/assets/style.css";
                 script defer src="/assets/app.js" {}

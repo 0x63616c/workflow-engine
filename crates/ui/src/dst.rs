@@ -100,7 +100,7 @@ fn replay_cell(r: &RunRecord) -> Markup {
     html! { span.route { code { (command) } (copy_button(&command)) } }
 }
 
-fn dashboard_body(url: &str, s: &FuzzStatus) -> Markup {
+fn overview_body(s: &FuzzStatus) -> Markup {
     let uptime_ms = s.now.saturating_sub(s.started_at) * 1_000;
     let recent_minutes: Vec<u64> = s.per_minute.iter().rev().skip(1).take(5).copied().collect();
     let too_young_for_five_whole_minutes = uptime_ms < 6 * 60_000;
@@ -111,45 +111,14 @@ fn dashboard_body(url: &str, s: &FuzzStatus) -> Markup {
     };
     let speedup = if s.wall_ms == 0 { 0.0 } else { s.sim_ms as f64 / s.wall_ms as f64 };
     let open_findings = s.findings.iter().filter(|f| f.status != "fixed").count();
-    let t = &s.totals;
-    let faults = vec![
-        ("Replica crashes".to_string(), t.crashes),
-        ("Network partitions".to_string(), t.partitions),
-        ("Messages dropped".to_string(), t.messages_dropped),
-        ("View changes".to_string(), t.view_changes),
-        ("Gateway restarts".to_string(), t.gateway_restarts),
-        ("Worker restarts".to_string(), t.worker_restarts),
-        ("Cell failovers".to_string(), t.failovers),
-        ("Controller interrupted mid-plan".to_string(), t.controller_interruptions),
-        ("Controller acted on a stale plan".to_string(), t.controller_stale_plans),
-    ];
-    let work = vec![
-        ("Workflows".to_string(), t.workflows),
-        ("History events".to_string(), t.events),
-        ("Workflow tasks".to_string(), t.workflow_tasks),
-        ("Activities".to_string(), t.activities),
-        ("Replicated log entries".to_string(), t.ops),
-        ("Messages delivered".to_string(), t.messages),
-        ("Changes replicated between cells".to_string(), t.replicated),
-        ("Payloads offloaded".to_string(), t.claim_checks),
-        ("Controller rounds".to_string(), t.controller_rounds),
-        ("Builds rolled out".to_string(), t.rollouts),
-        ("Builds retired".to_string(), t.builds_retired),
-    ];
-    let pairs = |map: &std::collections::BTreeMap<String, u64>| {
-        let mut rows: Vec<(String, u64)> = map.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        rows
-    };
     html! {
         (head(
             html! {
                 h1 { "Simulation" }
                 @if s.running { (pill("good pulse", "Running")) } @else { (pill("warn", "Stopped")) }
-                @if s.failures > 0 { (pill("bad", &format!("{} failing seed{}", s.failures, if s.failures == 1 { "" } else { "s" }))) }
             },
             html! {
-                span.mono data-tip=(url) { (s.revision.chars().take(12).collect::<String>()) @if s.dirty { "+" } }
+                span.mono { (s.revision.chars().take(12).collect::<String>()) @if s.dirty { "+" } }
                 span.sep { (s.threads) " threads" }
                 span.sep { (count(s.ticks)) " ticks per run" }
                 span.sep { "Seeds from " span.mono { (s.first_seed) } }
@@ -164,7 +133,7 @@ fn dashboard_body(url: &str, s: &FuzzStatus) -> Markup {
             div.stat.alarm[s.failures > 0] {
                 div.label { "Failures" }
                 div.value { (count(s.failures)) }
-                div.note { @if s.failures == 0 { "Every check passed" } @else { "Replay below" } }
+                div.note { @if s.failures == 0 { "Every check passed" } @else { a.link href="/dst/failures" { "See failing seeds" } } }
             }
             (stat("Runs per minute", format!("{per_minute:.0}"), per_minute_note))
             (stat("Simulated time", duration_ms(s.sim_ms), &format!("{speedup:.0}× real time per core")))
@@ -176,66 +145,59 @@ fn dashboard_body(url: &str, s: &FuzzStatus) -> Markup {
             }
         }
         (throughput(s))
-
-        @if !s.recent_failures.is_empty() {
-            h2 { "Failing seeds" span.count { (s.recent_failures.len()) } }
-            div.panel.scroll {
-                table.tall {
-                    thead { tr { th { "Seed" } th { "Scenario" } th { "Finished" } th { "Failure" } th { "Replay" } } }
-                    tbody {
-                        @for r in &s.recent_failures {
-                            tr {
-                                td.id { (r.seed) }
-                                td.tight { (scenario(&r.options)) }
-                                td.tight.muted { (when(Timestamp::from_millis(r.time * 1_000))) }
-                                td.wrap { (failure_text(r.failure.as_deref().unwrap_or(""))) }
-                                td.tight { (replay_cell(r)) }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         h2 { "In flight" span.count { (s.in_flight.len()) } }
         div.seeds {
             @for seed in &s.in_flight { span.seed { (seed) } }
             @if s.in_flight.is_empty() { span.faint { "Nothing running" } }
         }
-
-        h2 { "Coverage" }
-        div.split {
-            (counts_table("Faults injected", "Count", &faults, false))
-            (counts_table("Work done", "Count", &work, false))
-        }
-
-        h2 { "Checks" }
-        div.split {
-            (counts_table("Invariant", "Verified", &pairs(&t.checks), false))
-            div.panel.scroll {
-                table {
-                    thead { tr { th { "Scenario" } th.num { "Runs" } th.num { "Failures" } } }
-                    tbody {
-                        @for (name, tally) in &s.scenarios {
-                            tr {
-                                td { (name) }
-                                td.num { (count(tally.runs)) }
-                                td.num { @if tally.failures > 0 { (pill("bad", &tally.failures.to_string())) } @else { span.faint { "0" } } }
-                            }
+        h2 { "Scenarios" }
+        div.panel.scroll {
+            table {
+                thead { tr { th { "Scenario" } th.num { "Runs" } th.num { "Failures" } } }
+                tbody {
+                    @for (name, tally) in &s.scenarios {
+                        tr {
+                            td { (name) }
+                            td.num { (count(tally.runs)) }
+                            td.num { @if tally.failures > 0 { (pill("bad", &tally.failures.to_string())) } @else { span.faint { "0" } } }
                         }
-                        @if s.scenarios.is_empty() { tr { td colspan="3" { span.faint { "Nothing yet" } } } }
+                    }
+                    @if s.scenarios.is_empty() { tr { td colspan="3" { span.faint { "Nothing yet" } } } }
+                }
+            }
+        }
+    }
+}
+
+fn failures_body(s: &FuzzStatus) -> Markup {
+    html! {
+        (head(html! { h1 { "Failures" } }, html! { span { (count(s.failures)) " of " (count(s.runs)) " runs" } }, html! {}))
+        @if s.recent_failures.is_empty() {
+            div.panel { (view::empty(icons::CHECK, "No failing seeds", html! {})) }
+        } @else {
+        div.panel.scroll {
+            table.tall {
+                thead { tr { th { "Seed" } th { "Scenario" } th { "Finished" } th { "Failure" } th { "Replay" } } }
+                tbody {
+                    @for r in &s.recent_failures {
+                        tr {
+                            td.id { (r.seed) }
+                            td.tight { (scenario(&r.options)) }
+                            td.tight.muted { (when(Timestamp::from_millis(r.time * 1_000))) }
+                            td.wrap { (failure_text(r.failure.as_deref().unwrap_or(""))) }
+                            td.tight { (replay_cell(r)) }
+                        }
                     }
                 }
             }
         }
-
-        h2 { "Workflows" }
-        div.split {
-            (counts_table("Kind", "Workflows", &pairs(&t.by_kind), true))
-            (counts_table("Outcome", "Workflows", &pairs(&t.by_status), true))
         }
+    }
+}
 
-        h2 { "Recent runs" }
+fn runs_body(s: &FuzzStatus) -> Markup {
+    html! {
+        (head(html! { h1 { "Runs" } }, html! { span { "Latest " (s.recent.len().min(40)) " of " (count(s.runs)) } }, html! {}))
         div.panel.scroll {
             table {
                 thead { tr {
@@ -267,8 +229,61 @@ fn dashboard_body(url: &str, s: &FuzzStatus) -> Markup {
                 }
             }
         }
+    }
+}
 
-        h2 { "Findings" span.count { (s.findings.len()) } }
+fn pairs(map: &std::collections::BTreeMap<String, u64>) -> Vec<(String, u64)> {
+    let mut rows: Vec<(String, u64)> = map.iter().map(|(k, v)| (k.clone(), *v)).collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    rows
+}
+
+fn coverage_body(s: &FuzzStatus) -> Markup {
+    let t = &s.totals;
+    let faults = vec![
+        ("Replica crashes".to_string(), t.crashes),
+        ("Network partitions".to_string(), t.partitions),
+        ("Messages dropped".to_string(), t.messages_dropped),
+        ("View changes".to_string(), t.view_changes),
+        ("Gateway restarts".to_string(), t.gateway_restarts),
+        ("Worker restarts".to_string(), t.worker_restarts),
+        ("Cell failovers".to_string(), t.failovers),
+        ("Controller interrupted mid-plan".to_string(), t.controller_interruptions),
+        ("Controller acted on a stale plan".to_string(), t.controller_stale_plans),
+    ];
+    let work = vec![
+        ("Workflows".to_string(), t.workflows),
+        ("History events".to_string(), t.events),
+        ("Workflow tasks".to_string(), t.workflow_tasks),
+        ("Activities".to_string(), t.activities),
+        ("Replicated log entries".to_string(), t.ops),
+        ("Messages delivered".to_string(), t.messages),
+        ("Changes replicated between cells".to_string(), t.replicated),
+        ("Payloads offloaded".to_string(), t.claim_checks),
+        ("Controller rounds".to_string(), t.controller_rounds),
+        ("Builds rolled out".to_string(), t.rollouts),
+        ("Builds retired".to_string(), t.builds_retired),
+    ];
+    html! {
+        (head(html! { h1 { "Coverage" } }, html! { span { "Across " (count(s.runs)) " runs" } }, html! {}))
+        div.split {
+            (counts_table("Faults injected", "Count", &faults, false))
+            (counts_table("Work done", "Count", &work, false))
+        }
+        h2 { "Invariants" }
+        (counts_table("Invariant", "Verified", &pairs(&t.checks), false))
+        h2 { "Workflows" }
+        div.split {
+            (counts_table("Kind", "Workflows", &pairs(&t.by_kind), true))
+            (counts_table("Outcome", "Workflows", &pairs(&t.by_status), true))
+        }
+    }
+}
+
+fn findings_body(s: &FuzzStatus) -> Markup {
+    let open = s.findings.iter().filter(|f| f.status != "fixed").count();
+    html! {
+        (head(html! { h1 { "Findings" } }, html! { span { (open) " open, " (s.findings.len() - open) " fixed" } }, html! {}))
         div.panel.scroll {
             table.tall {
                 thead { tr { th { "Caught" } th { "Suite" } th { "Seed" } th { "Status" } th { "Revision" } th { "Failure" } } }
@@ -293,11 +308,11 @@ fn dashboard_body(url: &str, s: &FuzzStatus) -> Markup {
     }
 }
 
-pub(crate) async fn dashboard(State(app): State<App>, Query(flash): Query<Flash>) -> Markup {
-    let nav = app.nav("dst");
+async fn section(app: &App, flash: &Flash, tab: &'static str, title: &str, body: fn(&FuzzStatus) -> Markup) -> Markup {
+    let nav = app.nav("dst").tab(tab);
     let Some(url) = &app.dst else {
         let body = html! {
-            (head(html! { h1 { "Simulation" } }, html! {}, html! {}))
+            (head(html! { h1 { (title) } }, html! {}, html! {}))
             div.panel {
                 (view::empty(icons::PULSE, "No fuzzer connected", html! {
                     span { "Start one, then point the UI at it." }
@@ -305,7 +320,7 @@ pub(crate) async fn dashboard(State(app): State<App>, Query(flash): Query<Flash>
                 }))
             }
         };
-        return page("Simulation", &nav.polling(false), &flash, body);
+        return page(title, &nav.polling(false), flash, body);
     };
     let status = async {
         let response = app
@@ -319,11 +334,31 @@ pub(crate) async fn dashboard(State(app): State<App>, Query(flash): Query<Flash>
     }
     .await;
     let body = match status {
-        Ok(status) => dashboard_body(url, &status),
+        Ok(status) => body(&status),
         Err(e) => html! {
-            (head(html! { h1 { "Simulation" } (pill("bad", "Unreachable")) }, html! { span.mono { (url) } }, html! {}))
+            (head(html! { h1 { (title) } (pill("bad", "Unreachable")) }, html! { span.mono { (url) } }, html! {}))
             div.alert role="alert" { (icon(icons::ALERT)) div { strong { "The fuzzer did not answer" } div.muted { (e) } } }
         },
     };
-    page("Simulation", &nav, &flash, body)
+    page(title, &nav, flash, body)
+}
+
+pub(crate) async fn overview(State(app): State<App>, Query(flash): Query<Flash>) -> Markup {
+    section(&app, &flash, "", "Simulation", overview_body).await
+}
+
+pub(crate) async fn failures(State(app): State<App>, Query(flash): Query<Flash>) -> Markup {
+    section(&app, &flash, "failures", "Failures", failures_body).await
+}
+
+pub(crate) async fn runs(State(app): State<App>, Query(flash): Query<Flash>) -> Markup {
+    section(&app, &flash, "runs", "Runs", runs_body).await
+}
+
+pub(crate) async fn coverage(State(app): State<App>, Query(flash): Query<Flash>) -> Markup {
+    section(&app, &flash, "coverage", "Coverage", coverage_body).await
+}
+
+pub(crate) async fn findings(State(app): State<App>, Query(flash): Query<Flash>) -> Markup {
+    section(&app, &flash, "findings", "Findings", findings_body).await
 }
