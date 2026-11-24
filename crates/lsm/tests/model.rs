@@ -154,6 +154,7 @@ fn crash_replay_is_physically_deterministic() {
                     assert_eq!(apply(&mut b, &mut dev_b, op), None);
                 }
             }
+            assert_eq!(a.fingerprint(), b.fingerprint(), "seed {seed}: trees that applied the same ops differ");
         }
         assert_eq!(apply(&mut a, &mut dev_a, &Op::Checkpoint), apply(&mut b, &mut dev_b, &Op::Checkpoint));
         assert_eq!(full_scan(&mut a, &mut dev_a), full_scan(&mut b, &mut dev_b));
@@ -246,4 +247,25 @@ fn space_is_reclaimed() {
         "peak blocks used: {peak}; 400 keys of ~150 bytes is ~20 blocks of live data, so blocks are leaking"
     );
     assert!(dev.len() as u64 <= grid.end_offset());
+}
+
+#[test]
+fn one_different_value_changes_the_fingerprint() {
+    for seed in 200..204 {
+        let mut prng = Prng::new(seed);
+        let (mut dev_a, mut dev_b) = (MemDevice::new(), MemDevice::new());
+        let mut a = Lsm::open(&mut dev_a, GRID, opts(), None).unwrap();
+        let mut b = Lsm::open(&mut dev_b, GRID, opts(), None).unwrap();
+        for _ in 0..1000 {
+            let op = gen_op(&mut prng, 500);
+            apply(&mut a, &mut dev_a, &op);
+            apply(&mut b, &mut dev_b, &op);
+        }
+        apply(&mut a, &mut dev_a, &Op::Put(b"key/diverged".to_vec(), b"a".to_vec()));
+        apply(&mut b, &mut dev_b, &Op::Put(b"key/diverged".to_vec(), b"b".to_vec()));
+        assert_ne!(a.fingerprint(), b.fingerprint(), "seed {seed}: a memtable difference went unseen");
+        apply(&mut a, &mut dev_a, &Op::Checkpoint);
+        apply(&mut b, &mut dev_b, &Op::Checkpoint);
+        assert_ne!(a.fingerprint(), b.fingerprint(), "seed {seed}: a difference in a flushed table went unseen");
+    }
 }

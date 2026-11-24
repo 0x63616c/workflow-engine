@@ -41,6 +41,9 @@ workflow must finish, and everything must converge.
 ## What is checked
 
 - Replicas of a shard commit the same log and hold byte-identical state.
+  Every 256 ticks, replicas at the same op compare the LSM fingerprint
+  (tables by checksum, plus the memtable), which reads no blocks; once the
+  run settles, they compare a full scan of their contents.
 - **Workflow outcomes**: every workflow's result is a function of its input,
   whatever it lived through. There are twelve kinds, covering activities in
   sequence and in parallel, timers, timer cancellation, signals, races,

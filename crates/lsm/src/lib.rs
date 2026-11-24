@@ -37,6 +37,7 @@ use std::collections::BTreeMap;
 use std::ops::Bound;
 use std::sync::Arc;
 use table::{BlockCache, LevelIter, Merge, Reader, Source, Table, TableBuilder, TableInfo, TableIter, Writer};
+use wfe_core::checksum::{Checksum, Hasher};
 use wfe_core::device::Device;
 
 pub type KeyValue = (Vec<u8>, Vec<u8>);
@@ -285,6 +286,31 @@ impl Lsm {
             }
         }
         Ok(out)
+    }
+
+    /// A checksum of the tree's physical state: every table (whose index
+    /// block names each data block by checksum) and the memtable. Physical
+    /// determinism means replicas that applied the same operations have equal
+    /// fingerprints, and equal fingerprints imply equal contents. Reads no
+    /// blocks.
+    pub fn fingerprint(&self) -> Checksum {
+        let mut h = Hasher::new();
+        h.update_u64(self.next_table_id);
+        for level in &self.levels {
+            h.update_u64(level.len() as u64);
+            for table in level {
+                h.update_u64(table.info.id).update_u64(table.info.index.address).update_u128(table.info.index.checksum);
+            }
+        }
+        h.update_u64(self.memtable.len() as u64);
+        for (key, value) in &self.memtable {
+            h.update_u64(key.len() as u64).update(key);
+            match value {
+                Some(value) => h.update_u64(1).update_u64(value.len() as u64).update(value),
+                None => h.update_u64(0),
+            };
+        }
+        h.finish()
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> Result<(), StorageError> {

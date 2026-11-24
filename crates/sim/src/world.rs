@@ -283,6 +283,12 @@ pub struct World {
     report: Report,
 }
 
+#[derive(Clone, Copy)]
+enum Compare {
+    Fingerprint,
+    Contents,
+}
+
 fn cluster_id(cell: CellId, shard: u32) -> u128 {
     0xCE11_0000_0000 + (u128::from(cell) << 32) + u128::from(shard)
 }
@@ -582,7 +588,7 @@ impl World {
             self.faults();
         }
         if tick.is_multiple_of(256) {
-            self.check_replicas(false);
+            self.check_replicas(false, Compare::Fingerprint);
         }
     }
 
@@ -669,7 +675,7 @@ impl World {
         }
     }
 
-    fn check_replicas(&mut self, all: bool) -> bool {
+    fn check_replicas(&mut self, all: bool, compare: Compare) -> bool {
         let mut settled = true;
         for cell in &mut self.cells {
             for (shard, row) in cell.slots.iter_mut().enumerate() {
@@ -680,14 +686,18 @@ impl World {
                         continue;
                     };
                     let commit = r.status().commit_min;
-                    let Some(digest) = r.read_store(|_, store| {
-                        let rows = store.scan(&[], &[0xff; 4], usize::MAX, false)?;
-                        let mut h = Hasher::new();
-                        for (k, v) in rows {
-                            h.update_u64(k.len() as u64).update(&k).update_u64(v.len() as u64).update(&v);
-                        }
-                        Ok(h.finish())
-                    }) else {
+                    let digest = match compare {
+                        Compare::Fingerprint => r.with_store(|_, store| store.lsm.fingerprint()),
+                        Compare::Contents => r.read_store(|_, store| {
+                            let rows = store.scan(&[], &[0xff; 4], usize::MAX, false)?;
+                            let mut h = Hasher::new();
+                            for (k, v) in rows {
+                                h.update_u64(k.len() as u64).update(&k).update_u64(v.len() as u64).update(&v);
+                            }
+                            Ok(h.finish())
+                        }),
+                    };
+                    let Some(digest) = digest else {
                         settled = false;
                         continue;
                     };
@@ -1403,7 +1413,7 @@ impl World {
             self.check_workflow(m);
         }
         let start = self.tick;
-        while !self.check_replicas(true) {
+        while !self.check_replicas(true, Compare::Contents) {
             assert!(self.tick < start + 20_000, "replicas did not converge");
             self.idle(50);
         }
