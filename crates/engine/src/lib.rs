@@ -65,10 +65,28 @@ pub(crate) fn decode_stored<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> T {
 pub enum Op {
     Api(ApiRequest),
     ApplyRouting(DeploymentRouting),
-    RoutingAcked { deployment: String, shard: ShardId, revision: u64 },
-    DrainageResult { version: DeploymentVersion, nonce: u64, count: u64 },
+    RoutingAcked {
+        deployment: String,
+        shard: ShardId,
+        revision: u64,
+    },
+    DrainageResult {
+        version: DeploymentVersion,
+        nonce: u64,
+        count: u64,
+    },
+    /// Count the open workflows pinned to `version` at this point in the log,
+    /// so the count includes every operation committed before it, whichever
+    /// view committed it. A primary's own unexecuted state cannot give that.
+    CountPinned {
+        version: DeploymentVersion,
+        nonce: u64,
+    },
     ApplyReplication(Chunk),
-    ReplicationShipped { cell: CellId, items: Vec<(ExecKey, u64)> },
+    ReplicationShipped {
+        cell: CellId,
+        items: Vec<(ExecKey, u64)>,
+    },
 }
 
 /// Part of an execution's state on its way to another cell.
@@ -811,6 +829,14 @@ impl Engine {
                 deployment::drainage_result(&mut tx, &version.build_id, nonce, count)?;
                 tx.commit(&Registry, false)?;
             }
+            Op::CountPinned { version, nonce } => {
+                let key = keys::pinned_answer(&version);
+                let answered: Option<(u64, u64)> = store.get(&key)?.map(|b| decode_stored(&b));
+                if answered.is_none_or(|(answered_nonce, _)| answered_nonce < nonce) {
+                    let count: u64 = store.get(&keys::pinned_count(&version))?.map(|b| decode_stored(&b)).unwrap_or(0);
+                    store.put(&key, &encode(&(nonce, count)))?;
+                }
+            }
             Op::ApplyReplication(chunk) => self.apply_replication(store, now, chunk)?,
             Op::ReplicationShipped { cell, items } => self.replication_shipped(store, cell, items)?,
         }
@@ -870,6 +896,9 @@ impl Engine {
                         }
                     }
                     deployment::DepTask::DrainCount { build_id, nonce } => {
+                        if !unacked.is_empty() {
+                            continue;
+                        }
                         let version = DeploymentVersion::new(&key.id, build_id);
                         for shard in 0..cfg.shard_count {
                             let packet = EnginePacket::CountPinned { version: version.clone(), nonce };
@@ -1136,8 +1165,14 @@ impl StateMachine for Engine {
                 self.propose_once(fx, Op::RoutingAcked { deployment, shard, revision });
             }
             EnginePacket::CountPinned { version, nonce } => {
-                let count: u64 = store.get(&keys::pinned_count(&version))?.map(|b| decode_stored(&b)).unwrap_or(0);
-                fx.send.push((from, EnginePacket::PinnedCount { version, nonce, shard: me, count }));
+                let answered: Option<(u64, u64)> =
+                    store.get(&keys::pinned_answer(&version))?.map(|b| decode_stored(&b));
+                match answered {
+                    Some((answered_nonce, count)) if answered_nonce == nonce => {
+                        fx.send.push((from, EnginePacket::PinnedCount { version, nonce, shard: me, count }));
+                    }
+                    Some(_) | None => self.propose_once(fx, Op::CountPinned { version, nonce }),
+                }
             }
             EnginePacket::PinnedCount { version, nonce, shard, count } => {
                 let tally = self.primary.drainage.entry(version.clone()).or_default();

@@ -14,6 +14,7 @@ const OUTBOX: u8 = 0x22;
 const CHANGE: u8 = 0x30;
 const VISIBILITY: u8 = 0x40;
 const PINNED: u8 = 0x41;
+const PINNED_ANSWER: u8 = 0x42;
 const SHARD: u8 = 0x50;
 const ROUTE: u8 = 0x51;
 
@@ -123,6 +124,11 @@ pub fn visibility_prefix(arch: u8) -> Vec<u8> {
 
 pub fn pinned_count(version: &DeploymentVersion) -> Vec<u8> {
     Key::new(PINNED).str(&version.deployment).str(&version.build_id).into_vec()
+}
+
+/// The last drainage count this shard committed for `version`: `(nonce, count)`.
+pub fn pinned_answer(version: &DeploymentVersion) -> Vec<u8> {
+    Key::new(PINNED_ANSWER).str(&version.deployment).str(&version.build_id).into_vec()
 }
 
 pub fn shard_state() -> Vec<u8> {
